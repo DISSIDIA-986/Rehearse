@@ -1,0 +1,51 @@
+# --- Re-include docs that the global ~/.gitignore_global excludes (*.md, .gitignore) ---
+!*.md
+!.gitignore
+!docs/
+!docs/*.md
+
+# --- Personal / sensitive data (NEVER commit to public repo) ---
+.env
+.env.*
+*.key
+secrets/
+# Anki exports & personal sentence banks
+anki/
+data/
+*.anki2
+*.anki2-journal
+sentences*.txt
+sentences*.csv
+decks/
+collection.*
+
+# --- Models & large artifacts ---
+models/
+*.gguf
+*.bin
+*.onnx
+*.safetensors
+*.mlx
+*.npz
+
+# --- Audio scratch ---
+*.wav
+*.mp3
+*.flac
+recordings/
+tmp_audio/
+
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.uv/
+.python-version
+
+# --- macOS / editor ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
