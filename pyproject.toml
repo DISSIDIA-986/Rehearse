@@ -3,7 +3,20 @@ name = "localvocal"
 version = "0.1.0"
 description = "Local, offline, free English speaking-practice voice assistant for Apple Silicon"
 requires-python = ">=3.11,<3.14"  # kokoro-onnx / model deps not yet on 3.14
-dependencies = []
+dependencies = ["numpy>=1.26"]
+
+[project.optional-dependencies]
+# Audio runtime (no torch) — install with: uv sync --extra audio
+audio = [
+    "faster-whisper>=1.0",   # ASR (CPU, int8)
+    "mlx-audio>=0.2",        # Kokoro TTS on Apple GPU
+    "misaki[en]>=0.7",       # Kokoro English G2P / text processing
+    "soxr>=0.5",             # high-quality resampling 48k<->16k/24k
+    "sounddevice>=0.4",      # mic capture + speaker playback (PortAudio)
+]
+# VAD model pulls torch (heavy) — separate so the audio extra stays light:
+#   uv sync --extra audio --extra vad
+vad = ["silero-vad>=5"]
 
 [dependency-groups]
 dev = ["pytest>=8"]
