@@ -14,10 +14,16 @@ def test_base_prompt_no_targets():
     assert "target" not in p.lower()  # no targets section
 
 
-def test_brief_mode_word_limit_rule():
+def test_brief_mode_is_short_but_warm():
     p = build_system_prompt([], brief=True)
-    assert "AT MOST 12 words" in p
+    assert "about 15 words" in p
     assert "1-3 sentences" not in p  # the normal rule is replaced, not appended
+    assert "warm" in p.lower() and "dismissive" in p.lower()  # never cold/rude
+
+
+def test_warmth_guard_in_both_modes():
+    for brief in (True, False):
+        assert "dismissive" in build_system_prompt([], brief=brief).lower()
 
 
 def test_targets_woven_in():

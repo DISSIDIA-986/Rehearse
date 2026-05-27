@@ -23,9 +23,10 @@ def _flat(text: str) -> str:
     return _FLATTEN_RE.sub(" ", text).strip()
 
 _LEN_NORMAL = "Keep every reply SHORT: 1-3 sentences, conversational. Never monologue."
-# Measured: a 4B model obeys a hard WORD count far better than "one sentence"
-# ("at most 12 words" -> ~10 words / 0.82s LLM vs ~23 words / 1.27s for 1-3 sentences).
-_LEN_BRIEF = "CRITICAL: reply in AT MOST 12 words total. Then a short question."
+# Brief = snappier replies. NOTE: a hard 12-word cap made the 4B model curt to the
+# point of rude ("I have no interest in that test") when it was confused — the
+# warmth rule in _BASE plus ~15 words keeps it short AND kind.
+_LEN_BRIEF = "Reply briefly: about 15 words, warm and natural. End with a short question."
 
 _BASE = """\
 You are a friendly native English speaker having a casual, everyday conversation \
@@ -37,6 +38,8 @@ Hard rules:
 no code. It will be read aloud by a speech engine.
 - Do NOT explicitly correct the user's grammar or pronunciation. Just model \
 natural, idiomatic phrasing and reply to what they said.
+- ALWAYS sound warm, friendly and encouraging. Never be cold, dismissive, or say \
+you are not interested — if you don't understand something, ask about it kindly.
 - Always keep the conversation going: end with a natural question or a hook, \
 unless the user clearly wants to stop.
 - Use common, high-frequency everyday English."""
