@@ -12,14 +12,11 @@ tracking is deliberately Phase 2.
 
 from __future__ import annotations
 
-import json
-import math
-import urllib.error
-import urllib.request
-from collections.abc import Callable
 from dataclasses import dataclass
 
-EmbedFn = Callable[[list[str]], list[list[float]]]
+# cosine/ollama_embed/EmbedFn live in the neutral embeddings module (C7); re-exported
+# here so existing importers (pipeline, tests) keep working unchanged.
+from localvocal.embeddings import EmbedFn, cosine, ollama_embed  # noqa: F401
 
 # Calibrated against real nomic-embed-text on this project's sentences
 # (2026-05-27): paraphrase/repeat pairs scored 0.55-1.0 (loosest real
@@ -27,20 +24,6 @@ EmbedFn = Callable[[list[str]], list[list[float]]]
 # gap — catches paraphrases, rejects unrelated. Re-run the calibration probe
 # if the embed model changes.
 DEFAULT_THRESHOLD = 0.50
-_OLLAMA_HOST = "http://localhost:11434"
-_EMBED_MODEL = "nomic-embed-text"
-
-
-def cosine(a: list[float], b: list[float]) -> float:
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    if na == 0.0 or nb == 0.0:
-        return 0.0
-    result = dot / (na * nb)
-    return result if math.isfinite(result) else 0.0  # guard nan/inf embeddings
 
 
 @dataclass
@@ -73,26 +56,3 @@ def score_practiced(
     hits = [h for h in hits if h.similarity >= threshold]
     hits.sort(key=lambda h: h.similarity, reverse=True)
     return hits
-
-
-def ollama_embed(
-    texts: list[str], model: str = _EMBED_MODEL, host: str = _OLLAMA_HOST
-) -> list[list[float]]:
-    """Embed texts via the local Ollama /api/embed endpoint (nomic-embed-text)."""
-    payload = json.dumps({"model": model, "input": texts}).encode()
-    req = urllib.request.Request(
-        f"{host}/api/embed",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read())
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
-        raise RuntimeError(f"Ollama embed request failed: {e}") from e
-    embs = data.get("embeddings")
-    if not isinstance(embs, list) or len(embs) != len(texts):
-        raise RuntimeError(
-            f"unexpected Ollama embed response (model {model!r}): {str(data)[:200]}"
-        )
-    return embs
