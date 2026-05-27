@@ -59,6 +59,7 @@ uv run localvocal --full-duplex          # voice barge-in (use with AirPods/head
 ```bash
 uv run localvocal --end-silence-ms 1500  # wait longer for you to finish (default 1000)
 uv run localvocal --manual-turns         # press Enter to start/stop each turn — zero time pressure
+uv run localvocal --manual-turns --brief # + short (~12-word) replies: snappier, you talk more
 ```
 **If recognition is inaccurate (accent / noise):** ASR now uses `vad_filter` +
 `beam_size=5` by default. If still off, use a bigger model (slower, more accurate):
