@@ -161,6 +161,7 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
     latencies: list[float] = []
     attempts = hits = 0
     practiced_keys: set[str] = set()
+    perr_shown = False
 
     def _cb(indata, frames, time_info, status):  # PortAudio thread
         try:
@@ -181,43 +182,56 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
     out_stream = sd.OutputStream(samplerate=out_sr, channels=1, dtype="float32")
     out_stream.start()
 
+    # out_stream is touched ONLY from the main thread (here). The Enter watcher
+    # just sets this event; play() checks it between chunks. No cross-thread
+    # stream access -> no race.
+    interrupt = threading.Event()
+
     def play(reply24k: np.ndarray) -> None:
-        """Resample 24k->device and play on the persistent stream. Half-duplex
-        blocks then flushes stale capture; full-duplex writes in chunks and barges
-        in on 3 voiced frames. try/finally guarantees the gate reopens."""
+        """Resample 24k->device, play in 100ms chunks. Interruptible between
+        chunks by the Enter key (both modes) or voice barge-in (full-duplex).
+        try/finally guarantees the capture gate reopens."""
         data = audio_io.resample(reply24k, tts.sr, out_sr)
+        chunk = max(1, int(0.1 * out_sr))
         gate.begin_playback()
+        interrupt.clear()
+        if full_duplex:
+            _flush()
+            vad_mon.reset()
+        voiced = 0
         try:
-            if full_duplex:
-                _flush()
-                vad_mon.reset()
-                chunk = max(1, int(0.1 * out_sr))
-                voiced = 0
-                for i in range(0, len(data), chunk):
-                    out_stream.write(data[i:i + chunk])
+            for i in range(0, len(data), chunk):
+                if interrupt.is_set():
+                    break
+                out_stream.write(data[i:i + chunk])
+                if full_duplex:  # watch the mic for a barge-in while we speak
                     while not audio_q.empty():
-                        voiced = voiced + 1 if vad_mon.prob(_frame16(audio_q.get_nowait())) > 0.6 else 0
-                    if voiced >= 3:  # user barged in
-                        out_stream.abort(); out_stream.start()
-                        break
-            else:
-                out_stream.write(data)  # blocks until played
+                        f16 = _frame16(audio_q.get_nowait())
+                        preroll.push(f16)  # keep onset so barge-in isn't clipped
+                        voiced = voiced + 1 if vad_mon.prob(f16) > 0.6 else 0
+                    if voiced >= 3:
+                        interrupt.set()
         finally:
+            if interrupt.is_set():
+                out_stream.abort(); out_stream.start()  # flush buffered tail (main thread only)
             gate.end_playback(time.monotonic())
             if not full_duplex:
                 _flush()  # drop echo / backlog captured while we were speaking
 
-    # background: press Enter to cut off the assistant mid-reply (both modes)
+    # background: press Enter to cut off the assistant mid-reply (both modes).
+    # Only sets the event; never touches out_stream (avoids a cross-thread race).
     def _watch_keys():
         for _ in sys.stdin:
-            out_stream.abort(); out_stream.start()
+            interrupt.set()
     threading.Thread(target=_watch_keys, daemon=True).start()
 
     def _summary():
         if latencies:
             print(f"\nlatency vad_end->first audio: p50={np.percentile(latencies,50):.2f}s "
                   f"p95={np.percentile(latencies,95):.2f}s over {len(latencies)} turns")
-        if attempts:
+        if not practiced_on:
+            print("practiced: tracking was unavailable (nomic-embed down) this session")
+        elif attempts:
             print(f"practiced: {hits} hits / {attempts} target-exposures, "
                   f"{len(practiced_keys)} distinct sentences")
 
@@ -246,15 +260,17 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
                     print("ai : Bye! Keep practicing.")
                     _summary(); return 0
                 print(f"ai : {r.reply_text}")
-                if practiced_on and r.practiced_error:
-                    print(f"  (practiced-scoring error: {r.practiced_error})")
-                attempts += len(targets)
-                for h in r.practiced:
-                    hits += 1
-                    k = _key(sentences, h.target)
-                    practiced_keys.add(k)
-                    st = stats.setdefault(k, PracticeStat())
-                    st.count += 1; st.last_ts = time.time()
+                if r.practiced_error and not perr_shown:
+                    print(f"  (practiced-scoring error: {r.practiced_error}; tracking off)")
+                    perr_shown = True
+                if practiced_on:
+                    attempts += len(targets)
+                    for h in r.practiced:
+                        hits += 1
+                        k = _key(sentences, h.target)
+                        practiced_keys.add(k)
+                        st = stats.setdefault(k, PracticeStat())
+                        st.count += 1; st.last_ts = time.time()
                 history += [{"role": "user", "content": r.user_text},
                             {"role": "assistant", "content": r.reply_text}]
                 history = history[-12:]  # keep context short
