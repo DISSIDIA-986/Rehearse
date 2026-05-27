@@ -693,6 +693,13 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     if args.menu:
+        # --menu is a standalone launcher; reject combos rather than silently
+        # ignoring a mode flag the user clearly meant (no silent drift).
+        if (args.smoke or args.manual_turns or args.brief or args.full_duplex
+                or args.content != "english" or args.path or args.decks):
+            print("--menu is a standalone launcher — don't combine it with other "
+                  "mode flags (pick the mode inside the menu).", file=sys.stderr)
+            return 2
         return run_menu()
 
     if args.content == "markdown":

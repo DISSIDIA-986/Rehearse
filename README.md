@@ -58,9 +58,11 @@ uv run localvocal --full-duplex          # voice barge-in (use with AirPods/head
 
 **Shortcut:** add a `lv` alias so you can launch the menu from anywhere without
 typing the long command (`lv` runs in a subshell, so your current directory is
-unchanged):
+unchanged). Run this **from the repo root** — it bakes in the repo's absolute,
+quoted path:
 ```bash
-echo "alias lv='(cd $(pwd) && uv run localvocal --menu)'" >> ~/.zshrc && source ~/.zshrc
+cd /path/to/LocalVocal   # the cloned repo (so $(pwd) below is correct)
+echo "alias lv='(cd \"$(pwd)\" && uv run localvocal --menu)'" >> ~/.zshrc && source ~/.zshrc
 lv   # opens the menu: English practice / Markdown recall / smoke / quit
 ```
 

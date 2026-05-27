@@ -2,8 +2,10 @@
 
 import builtins
 
+import pytest
+
 import localvocal.main_loop as ml
-from localvocal.main_loop import build_menu_argv, run_menu
+from localvocal.main_loop import build_menu_argv, main, run_menu
 
 
 def test_build_menu_argv_mapping():
@@ -47,8 +49,14 @@ def test_run_menu_markdown_bad_path_reprompts(monkeypatch, capsys):
     assert "No such file" in capsys.readouterr().out
 
 
-def test_run_menu_dispatches(monkeypatch):
-    # choosing 5 should call main(["--smoke"]) — stub main to capture, no models
+@pytest.mark.parametrize("choice,expected", [
+    ("1", []),
+    ("2", ["--manual-turns"]),
+    ("3", ["--manual-turns", "--brief"]),
+    ("5", ["--smoke"]),
+])
+def test_run_menu_dispatches_each_mode(monkeypatch, choice, expected):
+    # every non-markdown choice must reach main() with the argv its label promises
     captured = {}
 
     def fake_main(argv):
@@ -56,6 +64,33 @@ def test_run_menu_dispatches(monkeypatch):
         return 0
 
     monkeypatch.setattr(ml, "main", fake_main)
-    _feed(monkeypatch, ["5"])
+    _feed(monkeypatch, [choice])
     assert run_menu() == 0
-    assert captured["argv"] == ["--smoke"]
+    assert captured["argv"] == expected
+
+
+def test_run_menu_markdown_dispatches_with_expanded_path(monkeypatch, tmp_path):
+    md = tmp_path / "notes.md"
+    md.write_text("# x", encoding="utf-8")
+    captured = {}
+
+    def fake_main(argv):
+        captured["argv"] = argv
+        return 0
+
+    monkeypatch.setattr(ml, "main", fake_main)
+    _feed(monkeypatch, ["4", str(md)])
+    assert run_menu() == 0
+    assert captured["argv"] == ["--content", "markdown", "--path", str(md)]
+
+
+@pytest.mark.parametrize("argv", [
+    ["--menu", "--smoke"],
+    ["--menu", "--manual-turns"],
+    ["--menu", "--content", "markdown", "--path", "/x.md"],
+    ["--menu", "--full-duplex"],
+])
+def test_menu_rejects_combined_mode_flags(argv, capsys):
+    # --menu is standalone; combining it with a mode flag must error, not silently override
+    assert main(argv) == 2
+    assert "standalone" in capsys.readouterr().err
