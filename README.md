@@ -3,7 +3,7 @@
 > 本地、离线、免费、开源的英语口语对话练习助手 —— 在 Apple Silicon Mac 上跑。
 > A fully-local, offline, free, open-source English speaking-practice voice assistant for Apple Silicon Macs.
 
-**Status:** 🟡 Design phase (设计阶段). Approved architecture below; implementation not started.
+**Status:** 🟢 v1 + markdown-recall mode shipped (145 tests pass, `--smoke` green). Approved architecture below.
 
 ## 这是什么 / What it is
 
@@ -70,7 +70,7 @@ lv   # opens the menu: English practice / Markdown recall / smoke / quit
 ```bash
 uv run localvocal --end-silence-ms 1500  # wait longer for you to finish (default 1000)
 uv run localvocal --manual-turns         # press Enter to start/stop each turn — zero time pressure
-uv run localvocal --manual-turns --brief # + short (~12-word) replies: snappier, you talk more
+uv run localvocal --manual-turns --brief # + short (~15-word) replies: snappier, you talk more
 ```
 **If recognition is inaccurate (accent / noise):** ASR now uses `vad_filter` +
 `beam_size=5` by default. If still off, use a bigger model (slower, more accurate):
@@ -106,7 +106,7 @@ The coach never sees the expected answers, so it can't leak them; it offers a
 hint only after you stall, then moves on so you're never stuck. It prints a
 coverage summary at the end.
 
-**Status:** v1 + markdown-recall mode implemented, 131 tests pass, `--smoke` green.
+**Status:** v1 + markdown-recall mode implemented, 145 tests pass, `--smoke` green.
 The live mic loop is the one path validated manually (the dev environment had no
 mic; the full ASR→LLM→TTS chain is covered by automated TTS→ASR round-trip +
 full-turn tests).
@@ -117,8 +117,9 @@ full-turn tests).
   + Silero), continuous half-duplex conversation, Anki sentence injection + nomic
   "practiced" scoring, latency instrumentation, native smoke test.
 - **Phase 2:** ✅ markdown-recall mode — recall any markdown doc from memory via
-  local-LLM extraction + honest (cosine + fact-anchor) coverage scoring. TUI
-  launcher menu is deferred.
+  local-LLM extraction + honest (cosine + fact-anchor) coverage scoring. Plus an
+  interactive launcher menu (`--menu`) and a `lv` alias. The menu's *live status
+  display* (running-session stats) is still deferred.
 - **Later:** 用 `nomic-embed-text` + `bce-reranker` 做语义检索，按话题动态调相关句子 + 跨会话间隔复习排程（见 `TODOS.md`）。
 
 ## License

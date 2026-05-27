@@ -28,6 +28,15 @@
 - **Context:** Codex 标为 BLOCKER 级体验项但 v1 不做；D2 选了键盘中断 + AirPods 语音打断绕开。
 - **Depends on:** MVP 稳定。
 
+### T-P2-4: 启动菜单的运行时实时状态显示（live status TUI）
+- **What:** F2 已交付 `--menu` 选择式启动器 + `lv` alias；剩下 F1 设想的"运行中实时状态"——
+  会话进行时显示延迟、覆盖度/练过计数、当前 item 等的 TUI 状态栏。
+- **Why:** 用户每天在 Ghostty 里跑，想边练边看进度，不必等结束才看 summary。
+- **Pros:** 复用现有 summary 数据；菜单已搭好入口。
+- **Cons:** 真 TUI（curses/rich）会引入依赖，与"单二进制/零运行时依赖"取舍冲突；先证明菜单够用。
+- **Context:** F2 阶段明确把 live-status 划为 deferred；当前菜单只做启动前选择。
+- **Depends on:** 无（独立增强）。
+
 ## 启动前 Spike（Phase 1 第一步，不是延迟项）
 见 `docs/DESIGN.md` v2 Hardening：fork 前先验证 ① 连续循环 ② 非思考 qwen 且 TTFT 低
 ③ TTS 首音可接受 ④ 半双工无回声。

@@ -3,14 +3,19 @@
 > 交接给后续会话/agent。目标：**自主分阶段实现到底**，阶段间做对抗审查，无需人工确认。
 > Last updated: 2026-05-27 by Claude (Opus 4.7). Repo: https://github.com/DISSIDIA-986/LocalVocal
 
-## ✅ STATUS: v1 implemented (Phases A–G done)
+## ✅ STATUS: v1 + F2 markdown-recall mode shipped
 
-All phases built, each gated by a Codex adversarial review (B 5/10, C 6/10, D 5/10,
-E 4/10 → fixed) + a final comprehensive review (6/10 → 7/10, ship-blocker fixed).
-**84 tests pass; `uv run localvocal --smoke` PASS** (1843 sentences, qwen3.5:4b
-non-thinking TTFT ~0.27s, TTS→ASR verbatim, nomic-embed + Silero up).
+v1 (English conversation practice, Phases A–G) built, each phase gated by a Codex
+adversarial review + a final comprehensive review (ship-blocker fixed). Then **F2
+markdown-recall mode** (recall any markdown doc from memory; honest cosine+anchor
+coverage scoring; coach persona that can't leak answers) + an interactive launcher
+menu (`--menu`) and `lv` alias — each also gated by Codex review (T3/T4 checkpoints
++ a final + a menu review, all findings fixed).
+**145 tests pass; `uv run localvocal --smoke` PASS** (1843 sentences, qwen3.5:4b
+non-thinking, TTS→ASR verbatim, nomic-embed + Silero up).
 The ONLY remaining manual step is the real-microphone run (this environment has no
-mic): `uv run localvocal` — see README "Run". Everything mic-less is automated.
+mic): `uv run localvocal` (or `lv`) — see README "Run". Everything mic-less is automated.
+Deferred: the menu's live status display (running-session stats).
 
 ## 用户的执行指令（权威）
 
@@ -51,14 +56,14 @@ forgettable1105.xml(718) + GoogleNews.xml(1148) → 1843 unique，1136 带中文
 ## 进度（阶段 = 任务分组，每段一个 Codex 审查门）
 
 - [x] **Phase A — anki_loader (T5)**：✅ 已完成并推送（commit 561f15c）。9 测试过。
-- [ ] **Phase B — 纯逻辑模块**：text_sanitize（剥 markdown/emoji）、sentence_chunker（切句, 标点/无标点 token 上限/缩写不误切）、
+- [x] **Phase B — 纯逻辑模块**：text_sanitize（剥 markdown/emoji）、sentence_chunker（切句, 标点/无标点 token 上限/缩写不误切）、
       session_seeder（按最久未练抽 2-4 句）、prompt_builder（注入目标句 + plain-speech 指令）、practiced_scorer（nomic 余弦, D3）。全单测。
-- [ ] **Phase C — LLM (T2)**：llm_client（Ollama `/api/chat`, think:false）+ 启动 think 探针（断言无 `<think>` + TTFT<阈值）+ 短回复上限。集成测打 qwen3.5:4b。
-- [ ] **Phase D — 音频/ASR/TTS (T3,T7)**：audio_io（单设备, 重采样数学单测）、vad（Silero 端点状态机, 起始60-90ms/收尾250-350ms, 合成概率序列单测）、
+- [x] **Phase C — LLM (T2)**：llm_client（Ollama `/api/chat`, think:false）+ 启动 think 探针（断言无 `<think>` + TTFT<阈值）+ 短回复上限。集成测打 qwen3.5:4b。
+- [x] **Phase D — 音频/ASR/TTS (T3,T7)**：audio_io（单设备, 重采样数学单测）、vad（Silero 端点状态机, 起始60-90ms/收尾250-350ms, 合成概率序列单测）、
       asr（faster-whisper small.en, CPU）、tts（Kokoro via mlx-audio, GPU, 保温）。集成：**TTS→ASR 往返**（Kokoro 生成已知文本→whisper 转写≈原文，无需麦克风）。
-- [ ] **Phase E — 双工 + 主循环 (T4)**：duplex（半双工静音+guard / 键盘中断 / --full-duplex）、main_loop（全串行 asyncio：VAD→ASR→LLM→逐句TTS，常驻不退出直到 stop/Ctrl-C）。
-- [ ] **Phase F — 集成 harness (T8) + 最终全面对抗审查**：WAV fixture 集成测；然后独立全面 Codex 审查整个代码库。
-- [ ] **Phase G — 原生冒烟**：启动健康检查 + TTS→ASR 往返冒烟；交付 `scripts/mic_test`（一条命令的真麦手测）。
+- [x] **Phase E — 双工 + 主循环 (T4)**：duplex（半双工静音+guard / 键盘中断 / --full-duplex）、main_loop（全串行 asyncio：VAD→ASR→LLM→逐句TTS，常驻不退出直到 stop/Ctrl-C）。
+- [x] **Phase F — 集成 harness (T8) + 最终全面对抗审查**：WAV fixture 集成测；然后独立全面 Codex 审查整个代码库。
+- [x] **Phase G — 原生冒烟**：启动健康检查 + TTS→ASR 往返冒烟；交付 `scripts/mic_test`（一条命令的真麦手测）。
 
 任务卡 T1-T8 详见 `docs/DESIGN.md` 的 Implementation Tasks；JSONL 在 `~/.gstack/projects/LocalVocal/tasks-eng-review-*.jsonl`。
 注：T1 spike 已被实际实现吸收——直接自写（不 fork eauchs 那个 3-commit demo），在 Phase C/D 验证"非思考TTFT/TTS首音/无回声"。
