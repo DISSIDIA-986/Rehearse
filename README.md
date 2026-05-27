@@ -1,7 +1,7 @@
-# LocalVocal
+# Rehearse
 
-> 本地、离线、免费、开源的英语口语对话练习助手 —— 在 Apple Silicon Mac 上跑。
-> A fully-local, offline, free, open-source English speaking-practice voice assistant for Apple Silicon Macs.
+> 本地、离线、免费、开源的语音练习教练 —— 练英语口语对话，也能凭记忆复述任意 Markdown 笔记。在 Apple Silicon Mac 上跑。
+> A fully-local, offline, free, open-source voice coach for Apple Silicon Macs: practice English conversation, and recall any Markdown doc from memory — out loud.
 
 **Status:** 🟢 v1 + markdown-recall mode shipped (145 tests pass, `--smoke` green). Approved architecture below.
 
@@ -13,6 +13,11 @@
 A low-latency voice loop (you speak → assistant speaks back) that weaves your existing high-frequency
 sentences (e.g. an Anki sentence bank) into natural conversation, so you *practice them in context*
 instead of passively reviewing flashcards. Runs entirely offline.
+
+它还能做**凭记忆复述**：指定任意 Markdown 文件（简历、面试准备、术语表、演讲稿……），它把内容拆成要点来"考"你，
+你出声复述，系统诚实地评估覆盖度。详见下方 [Markdown-recall mode](#markdown-recall-mode--凭记忆复述任意-markdown)。
+It also does **recall practice**: point it at any Markdown file (resume, interview prep, a glossary, a
+speech) and it interviews you to recall the key points from memory — see [Markdown-recall mode](#markdown-recall-mode--凭记忆复述任意-markdown) below.
 
 ## 目标硬件 / Target hardware
 
@@ -50,10 +55,10 @@ XML decks in `data/`. First run downloads the Whisper / Kokoro / spaCy models
 
 ```bash
 uv sync --extra audio --extra vad        # install ASR/TTS/VAD (one time)
-uv run localvocal --smoke                # health check, no mic (recommended first)
-uv run localvocal --menu                 # interactive menu — pick a mode, no flags to memorize
-uv run localvocal                        # the live voice loop — just start talking
-uv run localvocal --full-duplex          # voice barge-in (use with AirPods/headphones)
+uv run rehearse --smoke                # health check, no mic (recommended first)
+uv run rehearse --menu                 # interactive menu — pick a mode, no flags to memorize
+uv run rehearse                        # the live voice loop — just start talking
+uv run rehearse --full-duplex          # voice barge-in (use with AirPods/headphones)
 ```
 
 **Shortcut:** add a `lv` alias so you can launch the menu from anywhere without
@@ -61,23 +66,23 @@ typing the long command (`lv` runs in a subshell, so your current directory is
 unchanged). Run this **from the repo root** — it bakes in the repo's absolute,
 quoted path:
 ```bash
-cd /path/to/LocalVocal   # the cloned repo (so $(pwd) below is correct)
-echo "alias lv='(cd \"$(pwd)\" && uv run localvocal --menu)'" >> ~/.zshrc && source ~/.zshrc
+cd /path/to/Rehearse   # the cloned repo (so $(pwd) below is correct)
+echo "alias lv='(cd \"$(pwd)\" && uv run rehearse --menu)'" >> ~/.zshrc && source ~/.zshrc
 lv   # opens the menu: English practice / Markdown recall / smoke / quit
 ```
 
 **If it feels too rushed (cuts you off while thinking):**
 ```bash
-uv run localvocal --end-silence-ms 1500  # wait longer for you to finish (default 1000)
-uv run localvocal --manual-turns         # press Enter to start/stop each turn — zero time pressure
-uv run localvocal --manual-turns --brief # + short (~15-word) replies: snappier, you talk more
+uv run rehearse --end-silence-ms 1500  # wait longer for you to finish (default 1000)
+uv run rehearse --manual-turns         # press Enter to start/stop each turn — zero time pressure
+uv run rehearse --manual-turns --brief # + short (~15-word) replies: snappier, you talk more
 ```
 **If recognition is inaccurate (accent / noise):** ASR now uses `vad_filter` +
 `beam_size=5` by default. If still off, use a bigger model (slower, more accurate):
 ```bash
-uv run localvocal --asr-model medium.en        # ~2.3s ASR vs ~0.9s for small.en
-uv run localvocal --asr-model distil-large-v3  # most accurate
-uv run localvocal --debug                # save each turn's audio+transcript to debug/ to inspect
+uv run rehearse --asr-model medium.en        # ~2.3s ASR vs ~0.9s for small.en
+uv run rehearse --asr-model distil-large-v3  # most accurate
+uv run rehearse --debug                # save each turn's audio+transcript to debug/ to inspect
 ```
 
 Defaults: half-duplex (mute mic while the assistant speaks — works on the Mac
@@ -91,8 +96,8 @@ conference summary, a prepared speech) and it interviews you to recall the key
 points **from memory**, out loud, tracking coverage honestly.
 
 ```bash
-uv run localvocal --content markdown --path /abs/path/to/notes.md
-uv run localvocal --content markdown --path notes.md --extract-model qwen3.5:9b
+uv run rehearse --content markdown --path /abs/path/to/notes.md
+uv run rehearse --content markdown --path notes.md --extract-model qwen3.5:9b
 ```
 
 How it works: the local LLM extracts the doc into a recall agenda (one-time,

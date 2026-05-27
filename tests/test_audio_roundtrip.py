@@ -9,14 +9,14 @@ without any audio hardware. Skipped if the `audio` extra is not installed.
 import numpy as np
 import pytest
 
-from localvocal.audio_io import ASR_SR, resample
+from rehearse.audio_io import ASR_SR, resample
 
 audio_deps = pytest.importorskip  # alias for readability
 audio_deps("mlx_audio", reason="audio extra not installed (uv sync --extra audio)")
 audio_deps("faster_whisper", reason="audio extra not installed")
 
-from localvocal.asr import WhisperASR  # noqa: E402
-from localvocal.tts import KokoroTTS  # noqa: E402
+from rehearse.asr import WhisperASR  # noqa: E402
+from rehearse.tts import KokoroTTS  # noqa: E402
 
 
 def _words(s: str) -> set[str]:

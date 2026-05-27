@@ -20,8 +20,8 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from localvocal.embeddings import EmbedFn, cosine, ollama_embed
-from localvocal.practice_item import PracticeItem
+from rehearse.embeddings import EmbedFn, cosine, ollama_embed
+from rehearse.practice_item import PracticeItem
 
 # Calibrated on real nomic-embed-text (2026-05-27): an answer that genuinely
 # covers a bullet scores 0.89-0.93; vague-but-related 0.49-0.55; unrelated ~0.40.

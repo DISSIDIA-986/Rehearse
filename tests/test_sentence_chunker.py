@@ -1,4 +1,4 @@
-from localvocal.sentence_chunker import chunk_sentences
+from rehearse.sentence_chunker import chunk_sentences
 
 
 def test_basic_split():

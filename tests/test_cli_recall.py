@@ -1,6 +1,6 @@
 """CLI dispatch for markdown-recall mode — the validation branch (no mic/models)."""
 
-from localvocal.main_loop import main
+from rehearse.main_loop import main
 
 
 def test_markdown_requires_path(capsys):

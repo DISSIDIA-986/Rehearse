@@ -3,9 +3,9 @@ from embeddings; the key invariant is that expected_points NEVER leak to the coa
 
 from collections import defaultdict
 
-from localvocal.coverage import BulletScore, ItemCoverage, Summary
-from localvocal.practice_item import PracticeItem
-from localvocal.recall_session import RecallSession
+from rehearse.coverage import BulletScore, ItemCoverage, Summary
+from rehearse.practice_item import PracticeItem
+from rehearse.recall_session import RecallSession
 
 
 class FakeTracker:

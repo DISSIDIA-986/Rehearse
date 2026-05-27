@@ -19,13 +19,13 @@ import re
 from dataclasses import asdict
 from pathlib import Path
 
-from localvocal.coverage import has_substance
-from localvocal.llm_client import chat
-from localvocal.practice_item import PracticeItem
+from rehearse.coverage import has_substance
+from rehearse.llm_client import chat
+from rehearse.practice_item import PracticeItem
 
 EXTRACT_MODEL = "qwen3.5:9b"  # one-time, accuracy > speed; --extract-model overrides
 EXTRACTOR_VERSION = 3  # bump when prompt/schema/parse logic changes -> invalidates cache
-_CACHE_DIR = Path.home() / ".cache" / "localvocal" / "recall"
+_CACHE_DIR = Path.home() / ".cache" / "rehearse" / "recall"
 MAX_CHUNK_CHARS = 4000
 CHUNK_OVERLAP = 200
 

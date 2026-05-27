@@ -1,4 +1,4 @@
-from localvocal.text_sanitize import sanitize_for_tts
+from rehearse.text_sanitize import sanitize_for_tts
 
 
 def test_emphasis_stripped():

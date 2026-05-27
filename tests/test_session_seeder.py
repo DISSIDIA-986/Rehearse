@@ -1,5 +1,5 @@
-from localvocal.anki_loader import Sentence
-from localvocal.session_seeder import PracticeStat, select_targets
+from rehearse.anki_loader import Sentence
+from rehearse.session_seeder import PracticeStat, select_targets
 
 
 def _s(text):

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 # cosine/ollama_embed/EmbedFn live in the neutral embeddings module (C7); re-exported
 # here so existing importers (pipeline, tests) keep working unchanged.
-from localvocal.embeddings import EmbedFn, cosine, ollama_embed  # noqa: F401
+from rehearse.embeddings import EmbedFn, cosine, ollama_embed  # noqa: F401
 
 # Calibrated against real nomic-embed-text on this project's sentences
 # (2026-05-27): paraphrase/repeat pairs scored 0.55-1.0 (loosest real

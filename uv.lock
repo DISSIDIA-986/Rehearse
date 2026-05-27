@@ -699,48 +699,6 @@ wheels = [
 ]
 
 [[package]]
-name = "localvocal"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "numpy" },
-]
-
-[package.optional-dependencies]
-audio = [
-    { name = "en-core-web-sm" },
-    { name = "faster-whisper" },
-    { name = "misaki", extra = ["en"] },
-    { name = "mlx-audio" },
-    { name = "sounddevice" },
-    { name = "soxr" },
-]
-vad = [
-    { name = "silero-vad" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "en-core-web-sm", marker = "extra == 'audio'", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
-    { name = "faster-whisper", marker = "extra == 'audio'", specifier = ">=1.0" },
-    { name = "misaki", extras = ["en"], marker = "extra == 'audio'", specifier = ">=0.7" },
-    { name = "mlx-audio", marker = "extra == 'audio'", specifier = ">=0.2" },
-    { name = "numpy", specifier = ">=1.26" },
-    { name = "silero-vad", marker = "extra == 'vad'", specifier = ">=5" },
-    { name = "sounddevice", marker = "extra == 'audio'", specifier = ">=0.4" },
-    { name = "soxr", marker = "extra == 'audio'", specifier = ">=0.5" },
-]
-provides-extras = ["audio", "vad"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8" }]
-
-[[package]]
 name = "markdown-it-py"
 version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1608,6 +1566,48 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0e/9d/8870b8981d27b22cda77bb26a5ac7ebfa9c7d9e0dea195a834a82380e748/regex-2026.5.9-cp313-cp313t-win_amd64.whl", hash = "sha256:b46b0f094dc1d3b90356c85a0bd2c9bafc4a6a190b9d6f8ddd5a033b6e088ed4", size = 281240, upload-time = "2026-05-09T23:14:05.56Z" },
     { url = "https://files.pythonhosted.org/packages/72/b1/3379415e8f135c13ac551353397cc4fe97b4978f3cac73c5fcbcded548b8/regex-2026.5.9-cp313-cp313t-win_arm64.whl", hash = "sha256:872acc074bd29ffc9913ecdfedf6ea77502312ca44a4aa0d3779089c6069d8de", size = 272383, upload-time = "2026-05-09T23:14:07.843Z" },
 ]
+
+[[package]]
+name = "rehearse"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "numpy" },
+]
+
+[package.optional-dependencies]
+audio = [
+    { name = "en-core-web-sm" },
+    { name = "faster-whisper" },
+    { name = "misaki", extra = ["en"] },
+    { name = "mlx-audio" },
+    { name = "sounddevice" },
+    { name = "soxr" },
+]
+vad = [
+    { name = "silero-vad" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "en-core-web-sm", marker = "extra == 'audio'", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
+    { name = "faster-whisper", marker = "extra == 'audio'", specifier = ">=1.0" },
+    { name = "misaki", extras = ["en"], marker = "extra == 'audio'", specifier = ">=0.7" },
+    { name = "mlx-audio", marker = "extra == 'audio'", specifier = ">=0.2" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "silero-vad", marker = "extra == 'vad'", specifier = ">=5" },
+    { name = "sounddevice", marker = "extra == 'audio'", specifier = ">=0.4" },
+    { name = "soxr", marker = "extra == 'audio'", specifier = ">=0.5" },
+]
+provides-extras = ["audio", "vad"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "requests"

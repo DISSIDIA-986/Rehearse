@@ -3,7 +3,7 @@ import sys
 import numpy as np
 import pytest
 
-from localvocal.audio_io import resample, to_mono
+from rehearse.audio_io import resample, to_mono
 
 
 def test_resample_identity():

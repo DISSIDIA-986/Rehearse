@@ -21,8 +21,8 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from localvocal.coverage import CoverageTracker, has_substance
-from localvocal.practice_item import PracticeItem
+from rehearse.coverage import CoverageTracker, has_substance
+from rehearse.practice_item import PracticeItem
 
 _WS = re.compile(r"\s+")
 

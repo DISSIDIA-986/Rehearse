@@ -1,5 +1,5 @@
-from localvocal.anki_loader import Sentence
-from localvocal.practice_item import PracticeItem, from_sentence
+from rehearse.anki_loader import Sentence
+from rehearse.practice_item import PracticeItem, from_sentence
 
 
 def test_key_normalizes_and_prefers_id():

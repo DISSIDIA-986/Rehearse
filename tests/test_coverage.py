@@ -1,7 +1,7 @@
 """Tests for honest coverage scoring (cosine + anchor gate). Fake embed = no model."""
 
-from localvocal.coverage import CoverageTracker, extract_anchors, has_substance
-from localvocal.practice_item import PracticeItem
+from rehearse.coverage import CoverageTracker, extract_anchors, has_substance
+from rehearse.practice_item import PracticeItem
 
 
 def test_extract_anchors_finds_facts_not_filler():
@@ -79,7 +79,7 @@ def test_anchorless_prose_needs_lexical_overlap():
 
 
 def test_coverage_is_sticky_and_cumulative_is_capped():
-    from localvocal.coverage import MAX_CUM_CHARS
+    from rehearse.coverage import MAX_CUM_CHARS
     it = PracticeItem(id="q", prompt="p", expected_points=["NPV"])
     tr = CoverageTracker([it], embed=lambda ts: [[1.0, 0.0] for _ in ts], threshold=0.0)
     assert tr.score(it, "NPV").bullets[0].status == "hit"

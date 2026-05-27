@@ -1,6 +1,6 @@
 import numpy as np
 
-from localvocal.audio_io import RingBuffer
+from rehearse.audio_io import RingBuffer
 
 
 def test_keeps_last_max_samples():

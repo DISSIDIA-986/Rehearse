@@ -4,8 +4,8 @@ import builtins
 
 import pytest
 
-import localvocal.main_loop as ml
-from localvocal.main_loop import build_menu_argv, main, run_menu
+import rehearse.main_loop as ml
+from rehearse.main_loop import build_menu_argv, main, run_menu
 
 
 def test_build_menu_argv_mapping():

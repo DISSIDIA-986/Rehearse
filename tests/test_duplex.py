@@ -1,4 +1,4 @@
-from localvocal.duplex import HalfDuplexGate
+from rehearse.duplex import HalfDuplexGate
 
 
 def test_half_duplex_mutes_during_playback_and_guard():

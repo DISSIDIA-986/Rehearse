@@ -22,12 +22,12 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from localvocal.anki_loader import Sentence
-from localvocal.llm_client import ChatResult, chat
-from localvocal.practiced_scorer import EmbedFn, PracticeHit, ollama_embed, score_practiced
-from localvocal.prompt_builder import build_system_prompt
-from localvocal.sentence_chunker import chunk_sentences
-from localvocal.text_sanitize import sanitize_for_tts
+from rehearse.anki_loader import Sentence
+from rehearse.llm_client import ChatResult, chat
+from rehearse.practiced_scorer import EmbedFn, PracticeHit, ollama_embed, score_practiced
+from rehearse.prompt_builder import build_system_prompt
+from rehearse.sentence_chunker import chunk_sentences
+from rehearse.text_sanitize import sanitize_for_tts
 
 ChatFn = Callable[..., ChatResult]
 

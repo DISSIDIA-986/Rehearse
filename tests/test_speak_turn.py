@@ -7,9 +7,9 @@ Uses fakes so it runs without Ollama/Kokoro.
 
 import numpy as np
 
-from localvocal.anki_loader import Sentence
-from localvocal.llm_client import ChatResult
-from localvocal.pipeline import SpokenTurn, respond, speak_turn
+from rehearse.anki_loader import Sentence
+from rehearse.llm_client import ChatResult
+from rehearse.pipeline import SpokenTurn, respond, speak_turn
 
 
 class _FakeASR:

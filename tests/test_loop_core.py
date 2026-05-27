@@ -1,8 +1,8 @@
 import numpy as np
 
-from localvocal.audio_io import RingBuffer
-from localvocal.loop_core import UtteranceAssembler, is_stop
-from localvocal.vad import EndpointConfig, EndpointDetector
+from rehearse.audio_io import RingBuffer
+from rehearse.loop_core import UtteranceAssembler, is_stop
+from rehearse.vad import EndpointConfig, EndpointDetector
 
 
 def test_is_stop():

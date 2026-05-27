@@ -1,6 +1,6 @@
 import pytest
 
-from localvocal.practiced_scorer import (
+from rehearse.practiced_scorer import (
     PracticeHit,
     cosine,
     ollama_embed,
@@ -68,7 +68,7 @@ def test_cosine_handles_nan_inf():
 
 
 def test_default_threshold_calibrated():
-    from localvocal.practiced_scorer import DEFAULT_THRESHOLD
+    from rehearse.practiced_scorer import DEFAULT_THRESHOLD
     # calibrated to the 0.454 (unrelated) .. 0.548 (paraphrase) gap
     assert 0.45 < DEFAULT_THRESHOLD < 0.55
 

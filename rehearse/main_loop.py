@@ -1,4 +1,4 @@
-"""LocalVocal entry point: startup, native smoke test, and the live voice loop.
+"""Rehearse entry point: startup, native smoke test, and the live voice loop.
 
 Startup order (Codex contract): load decks -> warmup LLM -> think_probe (fails
 loud on thinking/slow) -> load ASR/TTS/VAD models (warm). Then either:
@@ -20,23 +20,23 @@ from pathlib import Path
 
 import numpy as np
 
-from localvocal import audio_io
-from localvocal.anki_loader import load_sentences
-from localvocal.duplex import HalfDuplexGate
-from localvocal.llm_client import DEFAULT_MODEL, think_probe, warmup
-from localvocal.loop_core import UtteranceAssembler, is_stop
-from localvocal.pipeline import respond
-from localvocal.prompt_builder import build_system_prompt
-from localvocal.session_seeder import PracticeStat, select_targets
-from localvocal.vad import EndpointConfig, EndpointDetector, SileroVad
+from rehearse import audio_io
+from rehearse.anki_loader import load_sentences
+from rehearse.duplex import HalfDuplexGate
+from rehearse.llm_client import DEFAULT_MODEL, think_probe, warmup
+from rehearse.loop_core import UtteranceAssembler, is_stop
+from rehearse.pipeline import respond
+from rehearse.prompt_builder import build_system_prompt
+from rehearse.session_seeder import PracticeStat, select_targets
+from rehearse.vad import EndpointConfig, EndpointDetector, SileroVad
 
 PREROLL_MS = 200
 FRAME = 512  # samples @16k (Silero window, 32ms)
 
 
 def _load_models(asr_model: str = "small.en", voice: str = ""):
-    from localvocal.asr import WhisperASR
-    from localvocal.tts import KokoroTTS
+    from rehearse.asr import WhisperASR
+    from rehearse.tts import KokoroTTS
 
     tts = KokoroTTS(voice=voice) if voice else KokoroTTS()
     return WhisperASR(model_size=asr_model), tts
@@ -63,7 +63,7 @@ def _startup(decks: list[str], model: str, voice: str, asr_model: str):
     except Exception as e:
         print(f"Startup failed: {e}", file=sys.stderr)
         return None
-    from localvocal.practiced_scorer import ollama_embed
+    from rehearse.practiced_scorer import ollama_embed
     practiced_on = True
     try:
         ollama_embed(["ping"])
@@ -90,7 +90,7 @@ def _save_debug(debug_dir, utterance16k, user_text, reply_text, info):
 
 def smoke(decks: list[str], model: str) -> int:
     """Native smoke test: everything that does not need a microphone."""
-    print("== LocalVocal smoke ==")
+    print("== Rehearse smoke ==")
     ok = True
 
     try:
@@ -121,7 +121,7 @@ def smoke(decks: list[str], model: str) -> int:
         print(f"[FAIL] audio round-trip: {e}"); ok = False
 
     try:
-        from localvocal.practiced_scorer import ollama_embed
+        from rehearse.practiced_scorer import ollama_embed
 
         ollama_embed(["ping"])
         print("[ok] nomic-embed reachable (D3 practiced scoring)")
@@ -158,7 +158,7 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
         print(f"sounddevice unavailable ({e}). Install: uv sync --extra audio",
               file=sys.stderr)
         return 1
-    from localvocal.practiced_scorer import ollama_embed
+    from rehearse.practiced_scorer import ollama_embed
 
     started = _startup(decks, model, voice, asr_model)
     if started is None:
@@ -348,7 +348,7 @@ def run_manual(decks: list[str], model: str, voice: str, n_targets: int,
     except Exception as e:
         print(f"sounddevice unavailable ({e}). Install: uv sync --extra audio", file=sys.stderr)
         return 1
-    from localvocal.practiced_scorer import ollama_embed
+    from rehearse.practiced_scorer import ollama_embed
 
     started = _startup(decks, model, voice, asr_model)
     if started is None:
@@ -457,7 +457,7 @@ def _startup_recall(model: str, voice: str, asr_model: str):
     except Exception as e:
         print(f"Startup failed: {e}", file=sys.stderr)
         return None
-    from localvocal.embeddings import ollama_embed
+    from rehearse.embeddings import ollama_embed
     try:
         ollama_embed(["ping"])
     except Exception as e:
@@ -480,10 +480,10 @@ def run_recall(path: str, model: str, voice: str, asr_model: str,
     except Exception as e:
         print(f"sounddevice unavailable ({e}). Install: uv sync --extra audio", file=sys.stderr)
         return 1
-    from localvocal.coverage import CoverageTracker, has_substance
-    from localvocal.markdown_extractor import load_markdown
-    from localvocal.pipeline import speak_turn
-    from localvocal.recall_session import RecallSession
+    from rehearse.coverage import CoverageTracker, has_substance
+    from rehearse.markdown_extractor import load_markdown
+    from rehearse.pipeline import speak_turn
+    from rehearse.recall_session import RecallSession
 
     started = _startup_recall(model, voice, asr_model)
     if started is None:
@@ -530,8 +530,8 @@ def run_recall(path: str, model: str, voice: str, asr_model: str,
     out_stream.start()
 
     def say(text: str) -> None:
-        from localvocal.sentence_chunker import chunk_sentences
-        from localvocal.text_sanitize import sanitize_for_tts
+        from rehearse.sentence_chunker import chunk_sentences
+        from rehearse.text_sanitize import sanitize_for_tts
         for c in chunk_sentences(sanitize_for_tts(text)):
             out_stream.write(audio_io.resample(tts.synth(c), tts.sr, out_sr))
 
@@ -610,7 +610,7 @@ def run_recall(path: str, model: str, voice: str, asr_model: str,
 
 
 _MENU = """\
-LocalVocal — pick a mode:
+Rehearse — pick a mode:
   1) English conversation practice (auto: just talk, VAD ends your turn)
   2) English practice — manual turns (Enter to start/stop, no time pressure)
   3) English practice — manual + brief replies (snappier, you talk more)
@@ -662,7 +662,7 @@ def run_menu() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="localvocal", description=__doc__)
+    ap = argparse.ArgumentParser(prog="rehearse", description=__doc__)
     ap.add_argument("--content", choices=["english", "markdown"], default="english",
                     help="english = Anki conversation practice; markdown = recall a doc from memory")
     ap.add_argument("--path", default=None,
@@ -709,7 +709,7 @@ def main(argv: list[str] | None = None) -> int:
         if not Path(args.path).is_file():
             print(f"No such file: {args.path}", file=sys.stderr)
             return 1
-        from localvocal.markdown_extractor import EXTRACT_MODEL
+        from rehearse.markdown_extractor import EXTRACT_MODEL
         return run_recall(args.path, args.model, args.voice, args.asr_model,
                           args.extract_model or EXTRACT_MODEL, args.debug)
 

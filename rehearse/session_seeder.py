@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from localvocal.anki_loader import Sentence
+from rehearse.anki_loader import Sentence
 
 
 @dataclass

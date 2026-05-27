@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from localvocal.anki_loader import (
+from rehearse.anki_loader import (
     Sentence,
     _clean,
     _has_cjk,

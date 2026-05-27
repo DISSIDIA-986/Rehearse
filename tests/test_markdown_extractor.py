@@ -1,7 +1,7 @@
 """Tests for the markdown -> PracticeItem extractor.
 
 Deterministic tests use a fake chat_fn (no model). The real-9b extraction test is
-gated behind LOCALVOCAL_LLM_TESTS=1 so routine `uv run pytest` stays fast (loading
+gated behind REHEARSE_LLM_TESTS=1 so routine `uv run pytest` stays fast (loading
 qwen3.5:9b costs ~30s cold).
 """
 
@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from localvocal.llm_client import ChatResult
-from localvocal.markdown_extractor import (
+from rehearse.llm_client import ChatResult
+from rehearse.markdown_extractor import (
     _EXTRACT_PROMPT,
     _fallback_items,
     chunk_markdown,
@@ -132,8 +132,8 @@ def test_load_caches_and_writes_agenda(tmp_path):
 
 # --- real 9b extraction (opt-in, slow) -----------------------------------
 
-@pytest.mark.skipif(not os.environ.get("LOCALVOCAL_LLM_TESTS"),
-                    reason="set LOCALVOCAL_LLM_TESTS=1 to run real qwen3.5:9b extraction (~30s cold)")
+@pytest.mark.skipif(not os.environ.get("REHEARSE_LLM_TESTS"),
+                    reason="set REHEARSE_LLM_TESTS=1 to run real qwen3.5:9b extraction (~30s cold)")
 def test_real_extract_resume(tmp_path):
     resume = Path("/Users/niuyp/Documents/github.com/portfolio2/resume/ai-engineer.md")
     if not resume.exists():

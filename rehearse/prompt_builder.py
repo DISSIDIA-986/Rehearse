@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 
-from localvocal.anki_loader import Sentence
+from rehearse.anki_loader import Sentence
 
 MAX_TARGETS = 4  # D3: weave in 2-4 per turn; hard cap as defense
 _FLATTEN_RE = re.compile(r"\s+")

@@ -1,12 +1,12 @@
 [project]
-name = "localvocal"
+name = "rehearse"
 version = "0.1.0"
-description = "Local, offline, free English speaking-practice voice assistant for Apple Silicon"
+description = "Local, offline, free voice coach for Apple Silicon: practice English conversation and recall any markdown doc from memory, out loud"
 requires-python = ">=3.11,<3.14"  # kokoro-onnx / model deps not yet on 3.14
 dependencies = ["numpy>=1.26"]
 
 [project.scripts]
-localvocal = "localvocal.main_loop:main"
+rehearse = "rehearse.main_loop:main"
 
 [project.optional-dependencies]
 # Audio runtime (no torch) — install with: uv sync --extra audio
@@ -32,7 +32,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["localvocal"]
+packages = ["rehearse"]
 
 [tool.hatch.metadata]
 allow-direct-references = true  # for the en_core_web_sm wheel URL in audio extra

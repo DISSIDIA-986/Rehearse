@@ -1,5 +1,5 @@
-from localvocal.anki_loader import Sentence
-from localvocal.prompt_builder import build_system_prompt
+from rehearse.anki_loader import Sentence
+from rehearse.prompt_builder import build_system_prompt
 
 
 def _s(text, native=None):

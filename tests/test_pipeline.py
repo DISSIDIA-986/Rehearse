@@ -9,16 +9,16 @@ without any audio hardware. Skipped if the audio extra or Ollama is unavailable.
 import numpy as np
 import pytest
 
-from localvocal.audio_io import ASR_SR, resample
+from rehearse.audio_io import ASR_SR, resample
 
 pytest.importorskip("mlx_audio", reason="audio extra not installed")
 pytest.importorskip("faster_whisper", reason="audio extra not installed")
 
-from localvocal.anki_loader import Sentence  # noqa: E402
-from localvocal.asr import WhisperASR  # noqa: E402
-from localvocal.llm_client import warmup  # noqa: E402
-from localvocal.pipeline import respond  # noqa: E402
-from localvocal.tts import KokoroTTS  # noqa: E402
+from rehearse.anki_loader import Sentence  # noqa: E402
+from rehearse.asr import WhisperASR  # noqa: E402
+from rehearse.llm_client import warmup  # noqa: E402
+from rehearse.pipeline import respond  # noqa: E402
+from rehearse.tts import KokoroTTS  # noqa: E402
 
 
 def _ollama_up():

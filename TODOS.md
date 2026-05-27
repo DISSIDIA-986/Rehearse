@@ -1,4 +1,4 @@
-# TODOS — LocalVocal
+# TODOS — Rehearse
 
 > 由 /plan-eng-review 生成（2026-05-27）。Phase 1 MVP 之后的延迟项，均已在 `docs/DESIGN.md` 决策过。
 

@@ -1,4 +1,4 @@
-from localvocal.vad import EndpointConfig, EndpointDetector, VadState
+from rehearse.vad import EndpointConfig, EndpointDetector, VadState
 
 
 def _cfg():

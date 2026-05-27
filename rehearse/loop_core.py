@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from localvocal.audio_io import RingBuffer
-from localvocal.vad import EndpointDetector, VadState
+from rehearse.audio_io import RingBuffer
+from rehearse.vad import EndpointDetector, VadState
 
 # Spoken end-of-session phrases (normalized: lowercased, trailing punctuation stripped).
 _STOP = {

@@ -10,9 +10,9 @@ import pytest
 pytest.importorskip("silero_vad", reason="vad extra not installed")
 pytest.importorskip("mlx_audio", reason="audio extra not installed")
 
-from localvocal.audio_io import ASR_SR, resample  # noqa: E402
-from localvocal.tts import KokoroTTS  # noqa: E402
-from localvocal.vad import SILERO_FRAME, SileroVad  # noqa: E402
+from rehearse.audio_io import ASR_SR, resample  # noqa: E402
+from rehearse.tts import KokoroTTS  # noqa: E402
+from rehearse.vad import SILERO_FRAME, SileroVad  # noqa: E402
 
 
 @pytest.fixture(scope="module")

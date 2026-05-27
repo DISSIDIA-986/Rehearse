@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from localvocal.audio_io import ASR_SR
+from rehearse.audio_io import ASR_SR
 
 DEFAULT_MODEL = "small.en"
 MIN_SAMPLES = int(0.1 * ASR_SR)  # <100ms: too short, whisper would hallucinate

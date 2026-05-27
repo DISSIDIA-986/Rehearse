@@ -8,7 +8,7 @@ import pytest
 
 import time
 
-from localvocal.llm_client import (
+from rehearse.llm_client import (
     DEFAULT_MODEL,
     ChatResult,
     _consume_stream,

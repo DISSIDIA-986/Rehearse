@@ -4,9 +4,9 @@ All deterministic (fake LLM + fake bag-of-words embed); no real models, no mic."
 import re
 from types import SimpleNamespace
 
-from localvocal.coverage import CoverageTracker
-from localvocal.markdown_extractor import load_markdown
-from localvocal.recall_session import RecallSession
+from rehearse.coverage import CoverageTracker
+from rehearse.markdown_extractor import load_markdown
+from rehearse.recall_session import RecallSession
 
 _MD = """\
 ## Pricing
