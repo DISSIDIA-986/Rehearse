@@ -33,11 +33,61 @@ PREROLL_MS = 200
 FRAME = 512  # samples @16k (Silero window, 32ms)
 
 
-def _load_models():
+def _load_models(asr_model: str = "small.en"):
     from localvocal.asr import WhisperASR
     from localvocal.tts import KokoroTTS
 
-    return WhisperASR(), KokoroTTS()
+    return WhisperASR(model_size=asr_model), KokoroTTS()
+
+
+def _startup(decks: list[str], model: str, voice: str, asr_model: str):
+    """Shared startup for both turn modes: load decks, warm LLM/ASR/TTS, probe
+    embeddings. Returns (sentences, asr, tts, practiced_on) or None on failure."""
+    from localvocal.tts import KokoroTTS
+
+    sentences = load_sentences(decks)
+    if not sentences:
+        print("No sentences loaded — check --decks paths.", file=sys.stderr)
+        return None
+    print(f"Loaded {len(sentences)} sentences. Warming up {model} + ASR/TTS "
+          f"(first run / cold model can take 30-60s)...")
+    try:
+        warmup(model=model)
+        think_probe(model=model)
+        asr, tts = _load_models(asr_model)
+        if voice:
+            tts = KokoroTTS(voice=voice)
+        # Warm ASR + TTS first-call (whisper init + Kokoro pipeline build) so the
+        # user's FIRST turn isn't an 8s cold path.
+        _warm = audio_io.resample(tts.synth("Let's practice English."),
+                                  tts.sr, audio_io.ASR_SR)
+        asr.transcribe(_warm)
+    except Exception as e:
+        print(f"Startup failed: {e}", file=sys.stderr)
+        return None
+    from localvocal.practiced_scorer import ollama_embed
+    practiced_on = True
+    try:
+        ollama_embed(["ping"])
+    except Exception as e:
+        practiced_on = False
+        print(f"  (nomic-embed unreachable: {e} — practiced tracking off)")
+    return sentences, asr, tts, practiced_on
+
+
+def _save_debug(debug_dir, utterance16k, user_text, reply_text, info):
+    """Save a turn's raw utterance WAV + transcript for diagnosing accent/noise."""
+    import wave
+    from pathlib import Path
+
+    d = Path(debug_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    pcm = (np.clip(utterance16k, -1.0, 1.0) * 32767).astype(np.int16)
+    with wave.open(str(d / f"{ts}.wav"), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(audio_io.ASR_SR)
+        w.writeframes(pcm.tobytes())
+    (d / f"{ts}.txt").write_text(f"you: {user_text}\nai : {reply_text}\n{info}\n")
 
 
 def smoke(decks: list[str], model: str) -> int:
@@ -100,7 +150,8 @@ def smoke(decks: list[str], model: str) -> int:
 
 
 def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
-             full_duplex: bool) -> int:  # pragma: no cover - needs a microphone
+             full_duplex: bool, end_silence_ms: int, asr_model: str,
+             debug: bool) -> int:  # pragma: no cover - needs a microphone
     import queue
 
     try:
@@ -109,56 +160,35 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
         print(f"sounddevice unavailable ({e}). Install: uv sync --extra audio",
               file=sys.stderr)
         return 1
-    from localvocal.tts import KokoroTTS
+    from localvocal.practiced_scorer import ollama_embed
 
-    sentences = load_sentences(decks)
-    if not sentences:
-        print("No sentences loaded — check --decks paths.", file=sys.stderr)
+    started = _startup(decks, model, voice, asr_model)
+    if started is None:
         return 1
-    print(f"Loaded {len(sentences)} sentences. Warming up {model} + ASR/TTS...")
+    sentences, asr, tts, practiced_on = started
     try:
-        warmup(model=model)
-        think_probe(model=model)
-        asr, tts = _load_models()
-        if voice:
-            tts = KokoroTTS(voice=voice)
         vad = SileroVad()
-        # Warm ASR/TTS/VAD too: the FIRST transcribe and the FIRST Kokoro synth
-        # (which builds the pipeline) are slow. Pay it now, not on the user's
-        # first turn (live test showed an 8s cold turn -> ~2s warm).
-        _warm = audio_io.resample(tts.synth("Let's practice English."),
-                                  tts.sr, audio_io.ASR_SR)
-        asr.transcribe(_warm)
-        vad.prob(np.zeros(SileroVad.FRAME, dtype=np.float32)); vad.reset()
+        vad.prob(np.zeros(SileroVad.FRAME, dtype=np.float32)); vad.reset()  # warm
     except Exception as e:
-        print(f"Startup failed: {e}", file=sys.stderr)
+        print(f"VAD load failed: {e} (install: uv sync --extra vad)", file=sys.stderr)
         return 1
 
     # Capture at the device's NATIVE rate (PortAudio won't always accept 16k),
-    # resample each block to 16k once for VAD/ASR. Keeps the input device open
-    # for the whole session (Codex blind-spot #2: never reopen per turn).
+    # resample each block to 16k once for VAD/ASR. Input device stays open all
+    # session (Codex blind-spot #2: never reopen per turn).
     try:
         in_sr = int(sd.query_devices(kind="input")["default_samplerate"])
     except Exception:
         in_sr = audio_io.DEFAULT_DEVICE_SR
     block = max(1, round(FRAME * in_sr / audio_io.ASR_SR))
-
-    # D3 practiced scoring needs nomic-embed; probe once, warn (not fatal) if down.
-    from localvocal.practiced_scorer import ollama_embed
-    practiced_on = True
-    try:
-        ollama_embed(["ping"])
-    except Exception as e:
-        practiced_on = False
-        print(f"  (nomic-embed unreachable: {e} — practiced tracking off)")
-
     try:
         out_sr = int(sd.query_devices(kind="output")["default_samplerate"])
     except Exception:
         out_sr = audio_io.DEFAULT_DEVICE_SR
 
+    debug_dir = "debug" if debug else None
     gate = HalfDuplexGate(full_duplex=full_duplex)
-    endpoint = EndpointDetector(EndpointConfig())
+    endpoint = EndpointDetector(EndpointConfig(end_silence_ms=end_silence_ms))
     preroll = audio_io.RingBuffer(int(PREROLL_MS / 1000 * audio_io.ASR_SR))
     vad_mon = SileroVad() if full_duplex else None  # separate VAD for barge-in
     assembler = UtteranceAssembler(vad, endpoint, preroll)
@@ -267,6 +297,10 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
                     print("ai : Bye! Keep practicing.")
                     _summary(); return 0
                 print(f"ai : {r.reply_text}")
+                if debug_dir:
+                    _save_debug(debug_dir, utterance, r.user_text, r.reply_text,
+                                f"asr={r.asr_s:.2f}s ttft={r.ttft_s}s tts={r.tts_s:.2f}s "
+                                f"practiced={[round(h.similarity, 2) for h in r.practiced]}")
                 if r.practiced_error and not perr_shown:
                     print(f"  (practiced-scoring error: {r.practiced_error}; tracking off)")
                     perr_shown = True
@@ -301,6 +335,100 @@ def _key(sentences, target_text):
     return target_text.lower()
 
 
+def run_manual(decks: list[str], model: str, voice: str, n_targets: int,
+               asr_model: str, debug: bool) -> int:  # pragma: no cover - needs a microphone
+    """Manual turns: you press Enter to start, speak as long as you want (pause to
+    think freely — no VAD time pressure), press Enter to send. Best for a thinking
+    non-native speaker. Quit with 's'+Enter or Ctrl-C."""
+    import queue
+
+    try:
+        import sounddevice as sd
+    except Exception as e:
+        print(f"sounddevice unavailable ({e}). Install: uv sync --extra audio", file=sys.stderr)
+        return 1
+    from localvocal.practiced_scorer import ollama_embed
+
+    started = _startup(decks, model, voice, asr_model)
+    if started is None:
+        return 1
+    sentences, asr, tts, practiced_on = started
+    try:
+        in_sr = int(sd.query_devices(kind="input")["default_samplerate"])
+        out_sr = int(sd.query_devices(kind="output")["default_samplerate"])
+    except Exception:
+        in_sr = out_sr = audio_io.DEFAULT_DEVICE_SR
+    block = max(1, round(FRAME * in_sr / audio_io.ASR_SR))
+    debug_dir = "debug" if debug else None
+
+    audio_q: queue.Queue = queue.Queue(maxsize=4000)
+
+    def _cb(indata, frames, time_info, status):
+        try:
+            audio_q.put_nowait(audio_io.to_mono(indata).copy())
+        except queue.Full:
+            pass
+
+    out_stream = sd.OutputStream(samplerate=out_sr, channels=1, dtype="float32")
+    out_stream.start()
+    stats: dict[str, PracticeStat] = {}
+    history: list[dict[str, str]] = []
+    attempts = hits = 0
+    pkeys: set[str] = set()
+    print("\nManual turns: Enter to speak, Enter again to send. Pause to think freely. "
+          "Type 's' then Enter to quit.\n")
+    try:
+        with sd.InputStream(samplerate=in_sr, channels=1, blocksize=block,
+                            dtype="float32", callback=_cb):
+            while True:
+                if input("[Enter to start speaking] ").strip().lower() == "s":
+                    break
+                while not audio_q.empty():  # drop pre-speech audio
+                    audio_q.get_nowait()
+                input("[recording... Enter when you're done] ")
+                frames = []
+                try:
+                    while True:
+                        frames.append(audio_io.resample(audio_q.get_nowait(), in_sr, audio_io.ASR_SR))
+                except queue.Empty:
+                    pass
+                if not frames:
+                    print("(heard nothing — try again)\n"); continue
+                utterance = np.concatenate(frames)
+                targets = select_targets(sentences, stats, n=n_targets)
+                r = respond(utterance, history, targets, asr=asr, tts=tts,
+                            embed=ollama_embed, system_prompt=build_system_prompt(targets))
+                if not r.user_text:
+                    print("(heard nothing — try again)\n"); continue
+                print(f"you: {r.user_text}")
+                print(f"ai : {r.reply_text}")
+                if debug_dir:
+                    _save_debug(debug_dir, utterance, r.user_text, r.reply_text,
+                                f"asr={r.asr_s:.2f}s tts={r.tts_s:.2f}s")
+                if practiced_on:
+                    attempts += len(targets)
+                    for h in r.practiced:
+                        hits += 1; k = _key(sentences, h.target); pkeys.add(k)
+                        st = stats.setdefault(k, PracticeStat()); st.count += 1; st.last_ts = time.time()
+                history += [{"role": "user", "content": r.user_text},
+                            {"role": "assistant", "content": r.reply_text}]
+                history = history[-12:]
+                if r.reply_audio.size:
+                    out_stream.write(audio_io.resample(r.reply_audio, tts.sr, out_sr))
+                print()
+    except (KeyboardInterrupt, EOFError):
+        pass
+    finally:
+        try:
+            out_stream.stop(); out_stream.close()
+        except Exception:
+            pass
+    print("\nBye! Keep practicing.")
+    if practiced_on and attempts:
+        print(f"practiced: {hits} hits / {attempts} target-exposures, {len(pkeys)} distinct")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="localvocal", description=__doc__)
     ap.add_argument("--decks", nargs="*", default=None,
@@ -310,6 +438,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--n-targets", type=int, default=3)
     ap.add_argument("--full-duplex", action="store_true",
                     help="enable voice barge-in (use with headphones/AirPods)")
+    ap.add_argument("--manual-turns", action="store_true",
+                    help="press Enter to start/stop each turn — no VAD time pressure")
+    ap.add_argument("--end-silence-ms", type=int, default=1000,
+                    help="silence (ms) that ends your turn in auto mode; raise for more thinking time")
+    ap.add_argument("--asr-model", default="small.en",
+                    help="ASR model: small.en (fast) | medium.en | distil-large-v3 (accurate, slower)")
+    ap.add_argument("--debug", action="store_true",
+                    help="save each turn's audio + transcript to debug/ for diagnosis")
     ap.add_argument("--smoke", action="store_true",
                     help="run health checks + TTS->ASR round-trip, then exit (no mic)")
     args = ap.parse_args(argv)
@@ -321,7 +457,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.smoke:
         return smoke(decks, args.model)
-    return run_loop(decks, args.model, args.voice, args.n_targets, args.full_duplex)
+    if args.manual_turns:
+        return run_manual(decks, args.model, args.voice, args.n_targets,
+                          args.asr_model, args.debug)
+    return run_loop(decks, args.model, args.voice, args.n_targets, args.full_duplex,
+                    args.end_silence_ms, args.asr_model, args.debug)
 
 
 if __name__ == "__main__":

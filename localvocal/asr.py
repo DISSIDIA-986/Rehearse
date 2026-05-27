@@ -27,12 +27,24 @@ class WhisperASR:
         self._model = WhisperModel(model_size, device=device, compute_type=compute_type)
 
     def transcribe(self, audio_16k_mono: np.ndarray, language: str = "en") -> str:
-        """Transcribe 16 kHz mono float32 audio to text."""
+        """Transcribe 16 kHz mono float32 audio to text.
+
+        Tuned for accented speech on a close mic + speaker setup (DJI + Mac):
+        - vad_filter strips internal silence/noise before decode (the assembled
+          utterance keeps internal pauses; silence makes Whisper hallucinate/repeat).
+        - beam_size=5 trades a little latency for accuracy on accented input.
+        - condition_on_previous_text=False stops runaway repetition.
+        """
         audio = np.asarray(audio_16k_mono, dtype=np.float32).reshape(-1)
         if audio.size < MIN_SAMPLES:  # empty or too-short clip -> skip (no hallucination)
             return ""
         segments, _info = self._model.transcribe(
-            audio, language=language, beam_size=1
+            audio,
+            language=language,
+            beam_size=5,
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 350},
+            condition_on_previous_text=False,
         )
         return "".join(seg.text for seg in segments).strip()
 

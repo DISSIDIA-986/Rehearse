@@ -34,6 +34,7 @@ models/
 *.flac
 recordings/
 tmp_audio/
+debug/
 
 # --- Python ---
 .venv/

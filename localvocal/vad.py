@@ -36,8 +36,10 @@ class EndpointConfig:
     threshold: float = 0.5        # speech prob above which a frame counts as voiced
     frame_ms: int = 32            # Silero v5: 512 samples @ 16kHz = 32ms
     start_voiced_ms: int = 64     # consecutive voiced time to START (2 frames, in 60-90ms)
-    end_silence_ms: int = 300     # trailing silence to END (250-350ms)
-    max_utterance_ms: int = 8_000  # hard cap so a stuck mic can't hang forever
+    end_silence_ms: int = 1_000   # trailing silence to END. 1s gives a non-native
+                                  # speaker room to pause mid-sentence and think;
+                                  # 300ms (native turn-taking) felt "too rushed".
+    max_utterance_ms: int = 20_000  # don't cut off a slow/long practice answer
 
 
 class EndpointDetector:
