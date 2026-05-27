@@ -226,3 +226,130 @@ Personal tool — no distribution. New CLI flags + a TUI entry; `uv run localvoc
   shape of your own problem, which is why it maps so cleanly onto the recall-drill we already built.
 - You instinctively reached for the multi-model review again ("召集 Codex 和其他 sub agents …
   制定最佳实践") — you've internalized that cross-checking beats one model's confident answer.
+
+---
+
+## F2 Phase 1 — Eng Review Lock (/plan-eng-review, 2026-05-27)
+
+Scope: Markdown-driven interview/recall mode on the EXISTING CLI (no TUI yet). Decisions:
+
+- **D1 scope:** 3 new modules (PracticeItem, content extractor, coverage) + edits. Accepted —
+  each is a distinct concern; collapsing hurts DRY.
+- **D2 separation (user's SOLID directive):** English-practice and Interview-coach are TWO
+  separate, mutually non-interfering modes (high cohesion, low coupling). Shared underneath:
+  - `pipeline.respond()` is refactored into a **pure spoken-turn primitive** (ASR→LLM→TTS,
+    NO scoring). Scoring/state move OUT to each mode's session. respond() does one thing.
+  - Two cohesive session drivers: `english_session` (scores "practiced") and
+    `interview_session` (scores "coverage" + owns current-item/attempt/cumulative state).
+    They don't import each other.
+  - Shared: respond() primitive, `PracticeItem`, the nomic embed in `practiced_scorer`.
+
+Locked engineering calls (per "investigate + keep it simple"):
+- **Anchors (fake-coverage guard):** the one-time LLM extraction ALSO emits each bullet's
+  `required_anchors` (numbers / named entities / acronyms / dates). Runtime: `covered` iff
+  cosine(cumulative_answer, bullet) ≥ calibrated_threshold AND all required_anchors present
+  (substring/fuzzy). Regex anchor-detection as cheap fallback if the LLM omits them.
+- **Extraction model:** `qwen3.5:9b` default (one-time, accuracy matters), `--extract-model`
+  override; live turns stay on `4b`. Use Ollama `format: json` structured output (don't parse
+  free text). Chunk a long doc by top-level `##`/`#`; extract per chunk; merge.
+- **Persona:** extractor also classifies `content_type` (interview / terminology / speech /
+  generic); `--persona` overrides. Coach prompt adapts. Plain-speech + warmth rules from
+  `prompt_builder` are kept.
+- **Drilling:** advance items in agenda order (Phase 1). nomic semantic retrieval of related
+  items = Phase 2 (TODOS T-P2-1). Never blob the whole doc into the prompt.
+- **Caching:** items + embeddings cached by file-content hash (e.g. `~/.gstack/.../mdcache/`);
+  reload is instant + offline. Re-extract on hash change.
+- **CLI:** `localvocal --content markdown --path /abs/file.md [--persona interview] [--mode manual|auto] [--debug]`.
+
+### Data flow (interview mode)
+
+```
+LOAD (once):  md file --hash--> cache hit? --no--> chunk by ## --> LLM(format:json) per chunk
+                                  |                                   -> {prompt, expected_points[],
+                                  yes                                     required_anchors[], support[]}
+                                  v                                   --> merge --> embed (nomic)
+                          PracticeItem[] (+embeddings) --> cache by hash
+
+TURN (per item, interview_session owns state):
+  mic -> [respond() primitive] -> user_text
+       coach prompt = persona + current item.prompt + MISSING bullets (hidden) [+1-2 support]
+       -> LLM(4b) -> TTS  (assistant asks / probes / reveals on stall)
+  CoverageTracker.score(item, cumulative_answer):
+       per bullet: cosine>=thr AND required_anchors present -> hit | partial | miss
+  advance: all bullets hit OR attempts exhausted -> next item (agenda order)
+  exit / "stop": session summary = covered X/Y bullets, strong/weak sections
+```
+
+### Test coverage (new code; targets ~100% on deterministic units)
+
+```
+DETERMINISTIC UNITS (★★★ unit targets)                 LLM/MODEL INTEGRATION (real, skip if down)
+[+] practice_item.py                                   [+] markdown_extractor.py (Ollama format:json)
+  ├─ [GAP] Sentence->PracticeItem adapter                ├─ [GAP][→integ] extract ai-engineer.md -> items+anchors
+  └─ [GAP] PracticeItem fields/keys                       ├─ [GAP][→integ] extract CTO-call-prep.md (33KB, chunked)
+[+] coverage.py CoverageTracker                          ├─ [GAP][→integ] JSON-parse-fail -> fallback parser
+  ├─ [GAP] bullet hit/partial/miss thresholds            └─ [GAP] cache hit by file hash (no re-extract)
+  ├─ [GAP] anchor present/absent gating
+  ├─ [GAP] cumulative-answer accumulation              [+] coach prompt build (prompt_builder)
+  ├─ [GAP] all-hit -> item complete -> advance           └─ [→EVAL] interviewer persona: asks Q, hides bullets,
+  └─ [GAP] empty/again/anchors-only edge                          probes on weak, reveals on stall
+[+] session advance / agenda order                     [+] coverage scoring on real answers
+  └─ [GAP] fewer items than N / all covered reset         └─ [GAP][→integ] Kokoro-spoken "answer" -> ASR -> coverage
+[+] anchor extraction fallback (regex)                          (calibrate threshold like the Anki scorer)
+  └─ [GAP] numbers/acronyms/caps detected
+
+COVERAGE: 0/~16 (greenfield). Deterministic ~100%; extraction/coach via real Ollama integ + 1 EVAL.
+```
+
+### NOT in scope (F2 Phase 1)
+- F1 TUI + SessionEngine extraction (separate phase; design doc above).
+- nomic semantic retrieval / "related items" (Phase 2, TODOS T-P2-1) — agenda order for now.
+- Multi-doc / doc-switching mid-session; editing the MD from the app.
+- Streaming partial transcript.
+
+### What already exists (reuse, don't rebuild)
+- `pipeline.respond` (refactor to primitive), `llm_client.chat` (turns + extraction with format:json),
+  `practiced_scorer.ollama_embed`+`cosine` (coverage basis), `prompt_builder` (persona variants),
+  `session_seeder` (generalize to item selection), `loop_core`/`main_loop` (mode dispatch),
+  `audio_io`/`asr`/`tts`/`vad`/`duplex` (untouched).
+
+### Implementation Tasks
+- [ ] **T1 (P1, human:~2h / CC:~20min)** — refactor: move scoring OUT of `pipeline.respond` → pure
+  spoken-turn primitive; english path scores in its session. Files: pipeline.py, main_loop.py. Verify: existing 87 tests still green.
+- [ ] **T2 (P1, human:~2h / CC:~20min)** — `practice_item.py`: PracticeItem + Sentence adapter. Unit tests.
+- [ ] **T3 (P1, human:~half day / CC:~40min)** — `markdown_extractor.py`: chunk + Ollama format:json →
+  items + required_anchors + content_type; cache by hash; JSON-fail fallback. Integ test on both samples.
+- [ ] **T4 (P1, human:~half day / CC:~40min)** — `coverage.py` CoverageTracker: bullet cosine + anchors +
+  cumulative; recalibrate threshold on real answers. Unit + integ (Kokoro→ASR→coverage).
+- [ ] **T5 (P2, human:~3h / CC:~25min)** — `interview_session` + coach persona in prompt_builder; agenda
+  advance; session summary. Manual + EVAL on persona.
+- [ ] **T6 (P2, human:~2h / CC:~15min)** — CLI wiring `--content markdown --path --persona --mode`; `--debug`
+  dumps extracted items + per-turn coverage.
+
+### Failure modes
+- LLM extraction returns bad/empty JSON → fallback parser (heading+bullets=item); `--debug` shows items.
+- Cosine over-credits vague talk → anchor gate (the locked guard). Threshold uncalibrated → calibrate before trusting.
+- 33KB doc context overflow on extraction → chunk by section (handled).
+- Cache staleness when user edits MD → key by content hash (re-extract on change).
+
+### Parallelization
+- Lane A (shared core): T1 → T2 (sequential; T2 builds on the primitive). 
+- Lane B (extraction): T3 (depends on T2's PracticeItem). 
+- Lane C (scoring): T4 (depends on T2). B and C parallel after T2.
+- Lane D: T5 → T6 (depend on T2/T3/T4). Conflict: T1/T5 both touch main_loop → coordinate.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 1 | reviewed | joint design review (Codex high + Claude subagent), consensus folded in |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | clean | F2 Phase 1: 2 decisions (scope, mode-separation) + 4 locked calls; 0 critical gaps; test diagram + T1-T6 |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | N/A (F1 TUI deferred; F2 is voice/CLI) |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+- **CROSS-MODEL:** Codex + Claude subagent agreed on PracticeItem layer, per-item drilling (no blob),
+  coverage-with-anchors (not vibes), and F2-before-TUI. No tension.
+- **UNRESOLVED:** 0.
+- **VERDICT:** ENG CLEARED — F2 Phase 1 ready to implement. Mode separation (SOLID) per user directive;
+  anchors enforced to prevent fake coverage. TUI/SessionEngine is a later phase.
