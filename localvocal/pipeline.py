@@ -53,7 +53,7 @@ def respond(
     asr,
     tts,
     chat_fn: ChatFn = chat,
-    embed: EmbedFn = ollama_embed,
+    embed: EmbedFn | None = ollama_embed,
     system_prompt: str | None = None,
 ) -> TurnResult:
     """Run one full turn. `history` is prior [{role,content}] (NOT mutated here)."""
@@ -79,7 +79,7 @@ def respond(
     practiced: list[PracticeHit] = []
     practiced_error: str | None = None
     target_texts = [t.text for t in targets]
-    if target_texts:
+    if target_texts and embed is not None:  # embed=None -> scoring disabled (off critical path)
         try:
             practiced = score_practiced(user_text, target_texts, embed)
         except Exception as e:

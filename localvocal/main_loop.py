@@ -33,18 +33,17 @@ PREROLL_MS = 200
 FRAME = 512  # samples @16k (Silero window, 32ms)
 
 
-def _load_models(asr_model: str = "small.en"):
+def _load_models(asr_model: str = "small.en", voice: str = ""):
     from localvocal.asr import WhisperASR
     from localvocal.tts import KokoroTTS
 
-    return WhisperASR(model_size=asr_model), KokoroTTS()
+    tts = KokoroTTS(voice=voice) if voice else KokoroTTS()
+    return WhisperASR(model_size=asr_model), tts
 
 
 def _startup(decks: list[str], model: str, voice: str, asr_model: str):
     """Shared startup for both turn modes: load decks, warm LLM/ASR/TTS, probe
     embeddings. Returns (sentences, asr, tts, practiced_on) or None on failure."""
-    from localvocal.tts import KokoroTTS
-
     sentences = load_sentences(decks)
     if not sentences:
         print("No sentences loaded — check --decks paths.", file=sys.stderr)
@@ -54,9 +53,7 @@ def _startup(decks: list[str], model: str, voice: str, asr_model: str):
     try:
         warmup(model=model)
         think_probe(model=model)
-        asr, tts = _load_models(asr_model)
-        if voice:
-            tts = KokoroTTS(voice=voice)
+        asr, tts = _load_models(asr_model, voice)
         # Warm ASR + TTS first-call (whisper init + Kokoro pipeline build) so the
         # user's FIRST turn isn't an 8s cold path.
         _warm = audio_io.resample(tts.synth("Let's practice English."),
@@ -289,7 +286,8 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
                 t_end = time.monotonic()
                 targets = select_targets(sentences, stats, n=n_targets)
                 r = respond(utterance, history, targets, asr=asr, tts=tts,
-                            embed=ollama_embed, system_prompt=build_system_prompt(targets))
+                            embed=ollama_embed if practiced_on else None,
+                            system_prompt=build_system_prompt(targets))
                 if not r.user_text:
                     continue
                 print(f"you: {r.user_text}")
@@ -301,9 +299,11 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
                     _save_debug(debug_dir, utterance, r.user_text, r.reply_text,
                                 f"asr={r.asr_s:.2f}s ttft={r.ttft_s}s tts={r.tts_s:.2f}s "
                                 f"practiced={[round(h.similarity, 2) for h in r.practiced]}")
-                if r.practiced_error and not perr_shown:
-                    print(f"  (practiced-scoring error: {r.practiced_error}; tracking off)")
-                    perr_shown = True
+                if r.practiced_error:  # latch tracking off so we don't block every turn
+                    if not perr_shown:
+                        print(f"  (practiced-scoring error: {r.practiced_error}; tracking off)")
+                        perr_shown = True
+                    practiced_on = False
                 if practiced_on:
                     attempts += len(targets)
                     for h in r.practiced:
@@ -361,13 +361,15 @@ def run_manual(decks: list[str], model: str, voice: str, n_targets: int,
     block = max(1, round(FRAME * in_sr / audio_io.ASR_SR))
     debug_dir = "debug" if debug else None
 
-    audio_q: queue.Queue = queue.Queue(maxsize=4000)
+    audio_q: queue.Queue = queue.Queue(maxsize=8000)
+    recording = threading.Event()
 
     def _cb(indata, frames, time_info, status):
-        try:
-            audio_q.put_nowait(audio_io.to_mono(indata).copy())
-        except queue.Full:
-            pass
+        if recording.is_set():  # only enqueue during a recording window -> clean boundary
+            try:
+                audio_q.put_nowait(audio_io.to_mono(indata).copy())
+            except queue.Full:
+                pass
 
     out_stream = sd.OutputStream(samplerate=out_sr, channels=1, dtype="float32")
     out_stream.start()
@@ -376,31 +378,40 @@ def run_manual(decks: list[str], model: str, voice: str, n_targets: int,
     attempts = hits = 0
     pkeys: set[str] = set()
     print("\nManual turns: Enter to speak, Enter again to send. Pause to think freely. "
-          "Type 's' then Enter to quit.\n")
+          "Say or type 's'+Enter to quit.\n")
     try:
         with sd.InputStream(samplerate=in_sr, channels=1, blocksize=block,
                             dtype="float32", callback=_cb):
             while True:
                 if input("[Enter to start speaking] ").strip().lower() == "s":
                     break
-                while not audio_q.empty():  # drop pre-speech audio
+                while not audio_q.empty():  # clear any leftover
                     audio_q.get_nowait()
+                recording.set()
                 input("[recording... Enter when you're done] ")
-                frames = []
+                recording.clear()
+                blocks = []
                 try:
                     while True:
-                        frames.append(audio_io.resample(audio_q.get_nowait(), in_sr, audio_io.ASR_SR))
+                        blocks.append(audio_q.get_nowait())
                 except queue.Empty:
                     pass
-                if not frames:
+                if not blocks:
                     print("(heard nothing — try again)\n"); continue
-                utterance = np.concatenate(frames)
+                # resample the whole utterance ONCE (no per-block boundary artifacts)
+                utterance = audio_io.resample(np.concatenate(blocks), in_sr, audio_io.ASR_SR)
                 targets = select_targets(sentences, stats, n=n_targets)
                 r = respond(utterance, history, targets, asr=asr, tts=tts,
-                            embed=ollama_embed, system_prompt=build_system_prompt(targets))
+                            embed=ollama_embed if practiced_on else None,
+                            system_prompt=build_system_prompt(targets))
+                if r.practiced_error:
+                    practiced_on = False  # latch off; don't block future turns
                 if not r.user_text:
                     print("(heard nothing — try again)\n"); continue
                 print(f"you: {r.user_text}")
+                if is_stop(r.user_text):  # spoken "stop"/"goodbye" ends the session
+                    print("ai : Bye! Keep practicing.")
+                    break
                 print(f"ai : {r.reply_text}")
                 if debug_dir:
                     _save_debug(debug_dir, utterance, r.user_text, r.reply_text,

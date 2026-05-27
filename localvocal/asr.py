@@ -38,15 +38,24 @@ class WhisperASR:
         audio = np.asarray(audio_16k_mono, dtype=np.float32).reshape(-1)
         if audio.size < MIN_SAMPLES:  # empty or too-short clip -> skip (no hallucination)
             return ""
-        segments, _info = self._model.transcribe(
-            audio,
-            language=language,
-            beam_size=5,
-            vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 350},
-            condition_on_previous_text=False,
-        )
-        return "".join(seg.text for seg in segments).strip()
+
+        def _run(vad_filter: bool) -> str:
+            segments, _info = self._model.transcribe(
+                audio,
+                language=language,
+                beam_size=5,
+                vad_filter=vad_filter,
+                vad_parameters={"min_silence_duration_ms": 350},
+                condition_on_previous_text=False,
+            )
+            return "".join(seg.text for seg in segments).strip()
+
+        text = _run(vad_filter=True)
+        # vad_filter can wrongly strip a quiet/soft answer to nothing; if there's
+        # clearly enough audio (>0.5s) but we got empty, retry without the filter.
+        if not text and audio.size > ASR_SR // 2:
+            text = _run(vad_filter=False)
+        return text
 
 
 # Expose the sample rate the model expects, for the audio pipeline.

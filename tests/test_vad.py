@@ -61,6 +61,14 @@ def test_max_utterance_cap_forces_end():
     assert ev == "end"  # capped
 
 
+def test_default_endpoint_is_patient():
+    # Deliberately patient defaults (raised from 300ms/8s after live feedback that
+    # 300ms cut off a non-native speaker mid-thought). Pinned so it's not silent drift.
+    c = EndpointConfig()
+    assert c.end_silence_ms == 1000
+    assert c.max_utterance_ms == 20_000
+
+
 def test_reset():
     d = EndpointDetector(_cfg())
     for _ in range(3):
