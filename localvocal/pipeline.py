@@ -55,8 +55,13 @@ def respond(
     chat_fn: ChatFn = chat,
     embed: EmbedFn | None = ollama_embed,
     system_prompt: str | None = None,
+    num_predict: int | None = None,
 ) -> TurnResult:
-    """Run one full turn. `history` is prior [{role,content}] (NOT mutated here)."""
+    """Run one full turn. `history` is prior [{role,content}] (NOT mutated here).
+
+    num_predict caps the reply length in tokens (brief mode passes a low value —
+    a hard cap is the only reliable way to keep a 4B model's replies short).
+    """
     empty = np.zeros(0, dtype=np.float32)
     t0 = time.monotonic()
     user_text = asr.transcribe(user_audio_16k)
@@ -67,7 +72,7 @@ def respond(
     system = system_prompt if system_prompt is not None else build_system_prompt(targets)
     messages = [{"role": "system", "content": system}, *history,
                 {"role": "user", "content": user_text}]
-    result = chat_fn(messages)
+    result = chat_fn(messages, num_predict=num_predict) if num_predict else chat_fn(messages)
 
     reply = sanitize_for_tts(result.text)
     chunks = chunk_sentences(reply)

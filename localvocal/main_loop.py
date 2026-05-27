@@ -148,7 +148,7 @@ def smoke(decks: list[str], model: str) -> int:
 
 def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
              full_duplex: bool, end_silence_ms: int, asr_model: str,
-             debug: bool) -> int:  # pragma: no cover - needs a microphone
+             debug: bool, brief: bool) -> int:  # pragma: no cover - needs a microphone
     import queue
 
     try:
@@ -287,7 +287,7 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
                 targets = select_targets(sentences, stats, n=n_targets)
                 r = respond(utterance, history, targets, asr=asr, tts=tts,
                             embed=ollama_embed if practiced_on else None,
-                            system_prompt=build_system_prompt(targets))
+                            system_prompt=build_system_prompt(targets, brief=brief))
                 if not r.user_text:
                     continue
                 print(f"you: {r.user_text}")
@@ -336,7 +336,7 @@ def _key(sentences, target_text):
 
 
 def run_manual(decks: list[str], model: str, voice: str, n_targets: int,
-               asr_model: str, debug: bool) -> int:  # pragma: no cover - needs a microphone
+               asr_model: str, debug: bool, brief: bool) -> int:  # pragma: no cover - needs a microphone
     """Manual turns: you press Enter to start, speak as long as you want (pause to
     think freely — no VAD time pressure), press Enter to send. Best for a thinking
     non-native speaker. Quit with 's'+Enter or Ctrl-C."""
@@ -403,7 +403,7 @@ def run_manual(decks: list[str], model: str, voice: str, n_targets: int,
                 targets = select_targets(sentences, stats, n=n_targets)
                 r = respond(utterance, history, targets, asr=asr, tts=tts,
                             embed=ollama_embed if practiced_on else None,
-                            system_prompt=build_system_prompt(targets))
+                            system_prompt=build_system_prompt(targets, brief=brief))
                 if r.practiced_error:
                     practiced_on = False  # latch off; don't block future turns
                 if not r.user_text:
@@ -455,6 +455,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="silence (ms) that ends your turn in auto mode; raise for more thinking time")
     ap.add_argument("--asr-model", default="small.en",
                     help="ASR model: small.en (fast) | medium.en | distil-large-v3 (accurate, slower)")
+    ap.add_argument("--brief", action="store_true",
+                    help="one-sentence replies — snappier (~1s less) and you talk more")
     ap.add_argument("--debug", action="store_true",
                     help="save each turn's audio + transcript to debug/ for diagnosis")
     ap.add_argument("--smoke", action="store_true",
@@ -470,9 +472,9 @@ def main(argv: list[str] | None = None) -> int:
         return smoke(decks, args.model)
     if args.manual_turns:
         return run_manual(decks, args.model, args.voice, args.n_targets,
-                          args.asr_model, args.debug)
+                          args.asr_model, args.debug, args.brief)
     return run_loop(decks, args.model, args.voice, args.n_targets, args.full_duplex,
-                    args.end_silence_ms, args.asr_model, args.debug)
+                    args.end_silence_ms, args.asr_model, args.debug, args.brief)
 
 
 if __name__ == "__main__":

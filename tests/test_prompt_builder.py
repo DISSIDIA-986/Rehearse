@@ -8,10 +8,16 @@ def _s(text, native=None):
 
 def test_base_prompt_no_targets():
     p = build_system_prompt([])
-    assert "SHORT" in p
+    assert "1-3 sentences" in p
     assert "PLAIN TEXT" in p
     assert "do NOT" in p.lower() or "Do NOT" in p  # no explicit correction
     assert "target" not in p.lower()  # no targets section
+
+
+def test_brief_mode_word_limit_rule():
+    p = build_system_prompt([], brief=True)
+    assert "AT MOST 12 words" in p
+    assert "1-3 sentences" not in p  # the normal rule is replaced, not appended
 
 
 def test_targets_woven_in():
