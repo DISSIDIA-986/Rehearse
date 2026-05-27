@@ -42,10 +42,33 @@ Fork & adapt [`eauchs/speech-to-speech-pipeline`](https://github.com/eauchs/spee
 完整设计与盲区清单见 [`docs/DESIGN.md`](docs/DESIGN.md)。
 Full design + risk/blind-spot list in [`docs/DESIGN.md`](docs/DESIGN.md).
 
+## Run / 运行
+
+Prereqs: `uv`, Ollama with `qwen3.5:4b` + `nomic-embed-text` pulled, your AnkiApp
+XML decks in `data/`. First run downloads the Whisper / Kokoro / spaCy models
+(needs network once; fully offline after).
+
+```bash
+uv sync --extra audio --extra vad        # install ASR/TTS/VAD (one time)
+uv run localvocal --smoke                # health check, no mic (recommended first)
+uv run localvocal                        # the live voice loop — just start talking
+uv run localvocal --full-duplex          # voice barge-in (use with AirPods/headphones)
+```
+
+Defaults: half-duplex (mute mic while the assistant speaks — works on the Mac
+speaker without echo), continuous until you say "stop" or hit Ctrl-C, press Enter
+to cut off a reply. On exit it prints latency p50/p95 and your practiced count.
+
+**Status:** v1 implemented, 84 tests pass, `--smoke` green. The live mic loop is the
+one path validated manually (the dev environment had no mic; the full ASR→LLM→TTS
+chain is covered by automated TTS→ASR round-trip + full-turn tests).
+
 ## 路线图 / Roadmap
 
-- **Phase 1 (MVP):** fork 跑通闭环 + 改成连续对话 + 从 Anki 导出抽样句子注入 system prompt。
-- **Phase 2:** 用 `nomic-embed-text` + `bce-reranker` 做语义检索，按话题动态调相关句子 + 间隔复习去重。
+- **Phase 1 (MVP):** ✅ done — full local loop (faster-whisper + qwen3.5:4b + Kokoro
+  + Silero), continuous half-duplex conversation, Anki sentence injection + nomic
+  "practiced" scoring, latency instrumentation, native smoke test.
+- **Phase 2:** 用 `nomic-embed-text` + `bce-reranker` 做语义检索，按话题动态调相关句子 + 跨会话间隔复习排程（见 `TODOS.md`）。
 
 ## License
 

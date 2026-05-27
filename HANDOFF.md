@@ -3,6 +3,15 @@
 > 交接给后续会话/agent。目标：**自主分阶段实现到底**，阶段间做对抗审查，无需人工确认。
 > Last updated: 2026-05-27 by Claude (Opus 4.7). Repo: https://github.com/DISSIDIA-986/LocalVocal
 
+## ✅ STATUS: v1 implemented (Phases A–G done)
+
+All phases built, each gated by a Codex adversarial review (B 5/10, C 6/10, D 5/10,
+E 4/10 → fixed) + a final comprehensive review (6/10 → 7/10, ship-blocker fixed).
+**84 tests pass; `uv run localvocal --smoke` PASS** (1843 sentences, qwen3.5:4b
+non-thinking TTFT ~0.27s, TTS→ASR verbatim, nomic-embed + Silero up).
+The ONLY remaining manual step is the real-microphone run (this environment has no
+mic): `uv run localvocal` — see README "Run". Everything mic-less is automated.
+
 ## 用户的执行指令（权威）
 
 自主分阶段推进，**中途不要和用户确认、不需要人工干预，直到完成最后一个任务**：
