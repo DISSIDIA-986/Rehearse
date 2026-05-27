@@ -73,16 +73,42 @@ Defaults: half-duplex (mute mic while the assistant speaks — works on the Mac
 speaker without echo), continuous until you say "stop" or hit Ctrl-C, press Enter
 to cut off a reply. On exit it prints latency p50/p95 and your practiced count.
 
-**Status:** v1 implemented, 84 tests pass, `--smoke` green. The live mic loop is the
-one path validated manually (the dev environment had no mic; the full ASR→LLM→TTS
-chain is covered by automated TTS→ASR round-trip + full-turn tests).
+### Markdown-recall mode / 凭记忆复述任意 Markdown
+
+Point it at ANY markdown file (resume, interview prep, a terminology glossary, a
+conference summary, a prepared speech) and it interviews you to recall the key
+points **from memory**, out loud, tracking coverage honestly.
+
+```bash
+uv run localvocal --content markdown --path /abs/path/to/notes.md
+uv run localvocal --content markdown --path notes.md --extract-model qwen3.5:9b
+```
+
+How it works: the local LLM extracts the doc into a recall agenda (one-time,
+cached, and written next to the file as `notes.md.recall.json` so you can see
+exactly what will be drilled). A warm coach asks each item and you answer from
+memory (manual turns — Enter to speak, Enter to send, so there's no time
+pressure). Coverage is scored **honestly**: a point counts as recalled only when
+your answer is both semantically on-topic AND contains its hard facts (the
+numbers/acronyms, or enough of its key words) — vague talk doesn't get credit.
+The coach never sees the expected answers, so it can't leak them; it offers a
+hint only after you stall, then moves on so you're never stuck. It prints a
+coverage summary at the end.
+
+**Status:** v1 + markdown-recall mode implemented, 131 tests pass, `--smoke` green.
+The live mic loop is the one path validated manually (the dev environment had no
+mic; the full ASR→LLM→TTS chain is covered by automated TTS→ASR round-trip +
+full-turn tests).
 
 ## 路线图 / Roadmap
 
 - **Phase 1 (MVP):** ✅ done — full local loop (faster-whisper + qwen3.5:4b + Kokoro
   + Silero), continuous half-duplex conversation, Anki sentence injection + nomic
   "practiced" scoring, latency instrumentation, native smoke test.
-- **Phase 2:** 用 `nomic-embed-text` + `bce-reranker` 做语义检索，按话题动态调相关句子 + 跨会话间隔复习排程（见 `TODOS.md`）。
+- **Phase 2:** ✅ markdown-recall mode — recall any markdown doc from memory via
+  local-LLM extraction + honest (cosine + fact-anchor) coverage scoring. TUI
+  launcher menu is deferred.
+- **Later:** 用 `nomic-embed-text` + `bce-reranker` 做语义检索，按话题动态调相关句子 + 跨会话间隔复习排程（见 `TODOS.md`）。
 
 ## License
 
