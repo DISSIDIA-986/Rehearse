@@ -26,7 +26,7 @@ from localvocal.llm_client import DEFAULT_MODEL, think_probe, warmup
 from localvocal.pipeline import respond
 from localvocal.prompt_builder import build_system_prompt
 from localvocal.session_seeder import PracticeStat, select_targets
-from localvocal.vad import EndpointConfig, EndpointDetector, SileroVad
+from localvocal.vad import EndpointConfig, EndpointDetector, SileroVad, VadState
 
 PREROLL_MS = 200
 FRAME = 512  # samples @16k (Silero window, 32ms)
@@ -92,8 +92,14 @@ def smoke(decks: list[str], model: str) -> int:
 
 def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
              full_duplex: bool) -> int:  # pragma: no cover - needs a microphone
-    import sounddevice as sd
+    import queue
 
+    try:
+        import sounddevice as sd
+    except Exception as e:
+        print(f"sounddevice unavailable ({e}). Install: uv sync --extra audio",
+              file=sys.stderr)
+        return 1
     from localvocal.tts import KokoroTTS
 
     sentences = load_sentences(decks)
@@ -101,49 +107,98 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
         print("No sentences loaded — check --decks paths.", file=sys.stderr)
         return 1
     print(f"Loaded {len(sentences)} sentences. Warming up {model}...")
-    warmup(model=model)
-    think_probe(model=model)
-    asr, tts = _load_models()
-    if voice:
-        tts = KokoroTTS(voice=voice)
-    vad = SileroVad()
+    try:
+        warmup(model=model)
+        think_probe(model=model)
+        asr, tts = _load_models()
+        if voice:
+            tts = KokoroTTS(voice=voice)
+        vad = SileroVad()
+    except Exception as e:
+        print(f"Startup failed: {e}", file=sys.stderr)
+        return 1
+
+    # Capture at the device's NATIVE rate (PortAudio won't always accept 16k),
+    # resample each block to 16k once for VAD/ASR. Keeps the input device open
+    # for the whole session (Codex blind-spot #2: never reopen per turn).
+    try:
+        in_sr = int(sd.query_devices(kind="input")["default_samplerate"])
+    except Exception:
+        in_sr = audio_io.DEFAULT_DEVICE_SR
+    block = max(1, round(FRAME * in_sr / audio_io.ASR_SR))
+
     gate = HalfDuplexGate(full_duplex=full_duplex)
     endpoint = EndpointDetector(EndpointConfig())
     preroll = audio_io.RingBuffer(int(PREROLL_MS / 1000 * audio_io.ASR_SR))
     stats: dict[str, PracticeStat] = {}
     history: list[dict[str, str]] = []
+    audio_q: queue.Queue = queue.Queue(maxsize=400)
 
-    # background: press Enter to cut off the assistant mid-reply (works both modes)
-    interrupt = threading.Event()
+    def _cb(indata, frames, time_info, status):  # runs on PortAudio thread
+        try:
+            audio_q.put_nowait(audio_io.to_mono(indata).copy())
+        except queue.Full:
+            pass
+
+    def _flush():
+        try:
+            while True:
+                audio_q.get_nowait()
+        except queue.Empty:
+            pass
+
+    def _frame16(blk: np.ndarray) -> np.ndarray:
+        return audio_io.resample(blk, in_sr, audio_io.ASR_SR)
+
+    def play(reply: np.ndarray) -> None:
+        """Play the reply. Half-duplex: block + flush stale capture afterward.
+        Full-duplex: non-blocking + watch for voice barge-in. try/finally so the
+        capture gate is ALWAYS reopened, even on interrupt/device error."""
+        gate.begin_playback()
+        try:
+            sd.play(reply, tts.sr)
+            if full_duplex:
+                voiced = 0
+                while sd.get_stream().active:
+                    try:
+                        blk = audio_q.get(timeout=0.05)
+                    except queue.Empty:
+                        continue
+                    voiced = voiced + 1 if vad.prob(_frame16(blk)) > 0.6 else 0
+                    if voiced >= 3:  # ~3 voiced frames -> user is talking, barge in
+                        sd.stop()
+                        break
+            else:
+                sd.wait()
+        finally:
+            gate.end_playback(time.monotonic())
+            if not full_duplex:
+                _flush()  # drop echo / backlog captured while we were speaking
+
+    # background: press Enter to cut off the assistant mid-reply (both modes)
     def _watch_keys():
         for _ in sys.stdin:
-            interrupt.set(); sd.stop()
+            sd.stop()
     threading.Thread(target=_watch_keys, daemon=True).start()
 
-    print(f"\nReady. Just start talking. {'(full-duplex)' if full_duplex else '(half-duplex; press Enter to interrupt)'}")
-    print("Ctrl-C to quit.\n")
-
-    def play(audio: np.ndarray):
-        gate.begin_playback()
-        sd.play(audio, tts.sr)
-        sd.wait()
-        gate.end_playback(time.monotonic())
-
+    mode = "full-duplex (voice barge-in)" if full_duplex else \
+        "half-duplex (press Enter to interrupt)"
     collected: list[np.ndarray] = []
     try:
-        with sd.InputStream(samplerate=audio_io.ASR_SR, channels=1,
-                            blocksize=FRAME, dtype="float32") as stream:
+        with sd.InputStream(samplerate=in_sr, channels=1, blocksize=block,
+                            dtype="float32", callback=_cb):
+            print(f"\nReady. Just start talking. [{mode}]  Ctrl-C to quit.\n")
             while True:
-                block, _ = stream.read(FRAME)
-                frame = audio_io.to_mono(block)
+                blk = audio_q.get()
                 now = time.monotonic()
                 if not gate.capture_enabled(now):
                     continue
+                frame = _frame16(blk)
                 preroll.push(frame)
                 ev = endpoint.update(vad.prob(frame))
                 if ev == "start":
                     collected = [preroll.get()]  # prepend pre-roll (no onset clip)
-                elif endpoint.state.value == "speaking":
+                elif endpoint.state is VadState.SPEAKING:
                     collected.append(frame)
                 elif ev == "end":
                     collected.append(frame)
@@ -151,20 +206,20 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
                     collected = []
                     endpoint.reset(); vad.reset()
                     targets = select_targets(sentences, stats, n=n_targets)
-                    sys_prompt = build_system_prompt(targets)
                     r = respond(utterance, history, targets, asr=asr, tts=tts,
-                                system_prompt=sys_prompt)
+                                system_prompt=build_system_prompt(targets))
                     if not r.user_text:
                         continue
                     print(f"you: {r.user_text}")
                     print(f"ai : {r.reply_text}")
+                    if r.practiced_error:
+                        print(f"  (practiced-scoring unavailable: {r.practiced_error})")
                     for h in r.practiced:
                         st = stats.setdefault(_key(sentences, h.target), PracticeStat())
                         st.count += 1; st.last_ts = time.time()
                     history += [{"role": "user", "content": r.user_text},
                                 {"role": "assistant", "content": r.reply_text}]
                     history = history[-12:]  # keep context short
-                    interrupt.clear()
                     if r.reply_audio.size:
                         play(r.reply_audio)
     except KeyboardInterrupt:

@@ -39,6 +39,7 @@ class TurnResult:
     reply_audio: np.ndarray
     practiced: list[PracticeHit] = field(default_factory=list)
     ttft_s: float | None = None
+    practiced_error: str | None = None  # set if D3 scoring failed (surfaced, not swallowed)
 
 
 def respond(
@@ -69,12 +70,15 @@ def respond(
     audio = np.concatenate(pieces) if pieces else empty
 
     practiced: list[PracticeHit] = []
+    practiced_error: str | None = None
     target_texts = [t.text for t in targets]
     if target_texts:
         try:
             practiced = score_practiced(user_text, target_texts, embed)
-        except Exception:
-            practiced = []  # scoring is a nicety; never break the turn
+        except Exception as e:
+            # never break the turn, but surface it (D3 is a locked requirement,
+            # silently empty 'practiced' would make the metric untrustworthy)
+            practiced_error = f"{type(e).__name__}: {e}"
 
     return TurnResult(
         user_text=user_text,
@@ -83,4 +87,5 @@ def respond(
         reply_audio=audio,
         practiced=practiced,
         ttft_s=result.ttft_s,
+        practiced_error=practiced_error,
     )
