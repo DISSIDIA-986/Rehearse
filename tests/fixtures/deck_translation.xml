@@ -1,0 +1,12 @@
+<deck name="TransDeck">
+  <config base="translation"/>
+  <fields>
+    <text name="Text" sides="11" lang="en-US"/>
+    <text name="Translation" sides="01" lang="zh-CN"/>
+    <text name="genocide" sides="01" lang="en-US"/>
+  </fields>
+  <cards>
+    <card><text name="Text">it just didn't appeal to me</text><text name="Translation">我对它没什么兴趣</text><text name="genocide">I have no interest in it</text></card>
+    <card><text name="Text">Worries oppress his spirit.</text><text name="Translation">忧虑压迫着他的精神。</text><text name="genocide">He is weighed down by worry.</text></card>
+  </cards>
+</deck>

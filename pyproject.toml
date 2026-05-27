@@ -1,0 +1,20 @@
+[project]
+name = "localvocal"
+version = "0.1.0"
+description = "Local, offline, free English speaking-practice voice assistant for Apple Silicon"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["localvocal"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

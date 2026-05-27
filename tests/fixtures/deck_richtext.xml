@@ -1,0 +1,11 @@
+<deck name="RichDeck">
+  <fields>
+    <rich-text name="Front" sides="11"/>
+    <rich-text name="Back" sides="01" lang="zh-CN"/>
+  </fields>
+  <cards>
+    <card><rich-text name="Back">Worries oppress his spirit.</rich-text><rich-text name="Front">Worries oppress his spirit.</rich-text></card>
+    <card><rich-text name="Back">emphasize the importance of education.</rich-text><rich-text name="Front">&lt;p&gt;The importance of education cannot be overemphasized.&lt;/p&gt;</rich-text></card>
+    <card><rich-text name="Front">   </rich-text><rich-text name="Back"></rich-text></card>
+  </cards>
+</deck>
