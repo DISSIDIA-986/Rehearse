@@ -5,12 +5,18 @@ description = "Local, offline, free English speaking-practice voice assistant fo
 requires-python = ">=3.11,<3.14"  # kokoro-onnx / model deps not yet on 3.14
 dependencies = ["numpy>=1.26"]
 
+[project.scripts]
+localvocal = "localvocal.main_loop:main"
+
 [project.optional-dependencies]
 # Audio runtime (no torch) — install with: uv sync --extra audio
 audio = [
     "faster-whisper>=1.0",   # ASR (CPU, int8)
     "mlx-audio>=0.2",        # Kokoro TTS on Apple GPU
     "misaki[en]>=0.7",       # Kokoro English G2P / text processing
+    # spaCy English model misaki needs (pin the wheel so it's reproducible/offline,
+    # otherwise misaki downloads it at first run and uv sync keeps removing it):
+    "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
     "soxr>=0.5",             # high-quality resampling 48k<->16k/24k
     "sounddevice>=0.4",      # mic capture + speaker playback (PortAudio)
 ]
@@ -27,6 +33,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["localvocal"]
+
+[tool.hatch.metadata]
+allow-direct-references = true  # for the en_core_web_sm wheel URL in audio extra
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

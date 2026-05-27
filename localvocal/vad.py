@@ -20,6 +20,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+import numpy as np
+
+SILERO_FRAME = 512  # samples Silero v5 expects per call @ 16 kHz (= 32 ms)
+
 
 class VadState(Enum):
     IDLE = "idle"          # waiting for speech to begin
@@ -75,3 +79,31 @@ class EndpointDetector:
             return None
 
         return None  # ENDED: caller must reset() before reuse
+
+
+class SileroVad:
+    """Silero VAD v5 wrapper: 512-sample @16k frame -> speech probability 0..1.
+
+    Lazy-imports silero-vad (the `vad` extra; pulls torch). Maintains the model's
+    internal recurrent state across frames within an utterance; call reset()
+    between utterances. Pair with EndpointDetector for start/end decisions.
+    """
+
+    FRAME = SILERO_FRAME
+
+    def __init__(self):
+        from silero_vad import load_silero_vad
+        import torch
+
+        self._torch = torch
+        self._model = load_silero_vad()
+
+    def prob(self, frame_16k: np.ndarray) -> float:
+        f = np.asarray(frame_16k, dtype=np.float32).reshape(-1)
+        if f.size != self.FRAME:  # pad/trim to the exact window Silero requires
+            f = f[: self.FRAME] if f.size > self.FRAME else np.pad(f, (0, self.FRAME - f.size))
+        with self._torch.no_grad():
+            return float(self._model(self._torch.from_numpy(f), 16_000).item())
+
+    def reset(self) -> None:
+        self._model.reset_states()
