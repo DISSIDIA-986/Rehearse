@@ -9,6 +9,7 @@ TTS has nothing weird to read.
 
 from __future__ import annotations
 
+import json
 import re
 
 from localvocal.anki_loader import Sentence
@@ -58,9 +59,9 @@ def build_system_prompt(targets: list[Sentence]) -> str:
             text = _flat(s.text)
             if not text:
                 continue
-            line = f'\n- "{text}"'
+            line = f"\n- {json.dumps(text)}"  # json-escape so quotes can't blur structure
             native = _flat(s.native) if s.native else ""
             if native and native.lower() != text.lower():
-                line += f'  (more natural: "{native}")'
+                line += f"  (more natural: {json.dumps(native)})"
             prompt += line
     return prompt

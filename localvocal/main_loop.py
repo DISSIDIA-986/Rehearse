@@ -23,10 +23,11 @@ from localvocal import audio_io
 from localvocal.anki_loader import load_sentences
 from localvocal.duplex import HalfDuplexGate
 from localvocal.llm_client import DEFAULT_MODEL, think_probe, warmup
+from localvocal.loop_core import UtteranceAssembler, is_stop
 from localvocal.pipeline import respond
 from localvocal.prompt_builder import build_system_prompt
 from localvocal.session_seeder import PracticeStat, select_targets
-from localvocal.vad import EndpointConfig, EndpointDetector, SileroVad, VadState
+from localvocal.vad import EndpointConfig, EndpointDetector, SileroVad
 
 PREROLL_MS = 200
 FRAME = 512  # samples @16k (Silero window, 32ms)
@@ -66,10 +67,18 @@ def smoke(decks: list[str], model: str) -> int:
         match = set(phrase.lower().replace(".", "").split()) <= set(
             heard.lower().replace(".", "").split()
         )
-        print(f"[{'ok' if match else 'WARN'}] TTS->ASR round-trip: {heard!r}")
-        ok = ok and bool(heard)
+        print(f"[{'ok' if match else 'FAIL'}] TTS->ASR round-trip: {heard!r}")
+        ok = ok and match  # gate on words surviving, not mere non-empty
     except Exception as e:
         print(f"[FAIL] audio round-trip: {e}"); ok = False
+
+    try:
+        from localvocal.practiced_scorer import ollama_embed
+
+        ollama_embed(["ping"])
+        print("[ok] nomic-embed reachable (D3 practiced scoring)")
+    except Exception as e:
+        print(f"[WARN] nomic-embed: {e} (practiced tracking will be off)")
 
     try:
         SileroVad()
@@ -127,14 +136,33 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
         in_sr = audio_io.DEFAULT_DEVICE_SR
     block = max(1, round(FRAME * in_sr / audio_io.ASR_SR))
 
+    # D3 practiced scoring needs nomic-embed; probe once, warn (not fatal) if down.
+    from localvocal.practiced_scorer import ollama_embed
+    practiced_on = True
+    try:
+        ollama_embed(["ping"])
+    except Exception as e:
+        practiced_on = False
+        print(f"  (nomic-embed unreachable: {e} — practiced tracking off)")
+
+    try:
+        out_sr = int(sd.query_devices(kind="output")["default_samplerate"])
+    except Exception:
+        out_sr = audio_io.DEFAULT_DEVICE_SR
+
     gate = HalfDuplexGate(full_duplex=full_duplex)
     endpoint = EndpointDetector(EndpointConfig())
     preroll = audio_io.RingBuffer(int(PREROLL_MS / 1000 * audio_io.ASR_SR))
+    vad_mon = SileroVad() if full_duplex else None  # separate VAD for barge-in
+    assembler = UtteranceAssembler(vad, endpoint, preroll)
     stats: dict[str, PracticeStat] = {}
     history: list[dict[str, str]] = []
     audio_q: queue.Queue = queue.Queue(maxsize=400)
+    latencies: list[float] = []
+    attempts = hits = 0
+    practiced_keys: set[str] = set()
 
-    def _cb(indata, frames, time_info, status):  # runs on PortAudio thread
+    def _cb(indata, frames, time_info, status):  # PortAudio thread
         try:
             audio_q.put_nowait(audio_io.to_mono(indata).copy())
         except queue.Full:
@@ -150,26 +178,30 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
     def _frame16(blk: np.ndarray) -> np.ndarray:
         return audio_io.resample(blk, in_sr, audio_io.ASR_SR)
 
-    def play(reply: np.ndarray) -> None:
-        """Play the reply. Half-duplex: block + flush stale capture afterward.
-        Full-duplex: non-blocking + watch for voice barge-in. try/finally so the
-        capture gate is ALWAYS reopened, even on interrupt/device error."""
+    out_stream = sd.OutputStream(samplerate=out_sr, channels=1, dtype="float32")
+    out_stream.start()
+
+    def play(reply24k: np.ndarray) -> None:
+        """Resample 24k->device and play on the persistent stream. Half-duplex
+        blocks then flushes stale capture; full-duplex writes in chunks and barges
+        in on 3 voiced frames. try/finally guarantees the gate reopens."""
+        data = audio_io.resample(reply24k, tts.sr, out_sr)
         gate.begin_playback()
         try:
-            sd.play(reply, tts.sr)
             if full_duplex:
+                _flush()
+                vad_mon.reset()
+                chunk = max(1, int(0.1 * out_sr))
                 voiced = 0
-                while sd.get_stream().active:
-                    try:
-                        blk = audio_q.get(timeout=0.05)
-                    except queue.Empty:
-                        continue
-                    voiced = voiced + 1 if vad.prob(_frame16(blk)) > 0.6 else 0
-                    if voiced >= 3:  # ~3 voiced frames -> user is talking, barge in
-                        sd.stop()
+                for i in range(0, len(data), chunk):
+                    out_stream.write(data[i:i + chunk])
+                    while not audio_q.empty():
+                        voiced = voiced + 1 if vad_mon.prob(_frame16(audio_q.get_nowait())) > 0.6 else 0
+                    if voiced >= 3:  # user barged in
+                        out_stream.abort(); out_stream.start()
                         break
             else:
-                sd.wait()
+                out_stream.write(data)  # blocks until played
         finally:
             gate.end_playback(time.monotonic())
             if not full_duplex:
@@ -178,53 +210,65 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
     # background: press Enter to cut off the assistant mid-reply (both modes)
     def _watch_keys():
         for _ in sys.stdin:
-            sd.stop()
+            out_stream.abort(); out_stream.start()
     threading.Thread(target=_watch_keys, daemon=True).start()
+
+    def _summary():
+        if latencies:
+            print(f"\nlatency vad_end->first audio: p50={np.percentile(latencies,50):.2f}s "
+                  f"p95={np.percentile(latencies,95):.2f}s over {len(latencies)} turns")
+        if attempts:
+            print(f"practiced: {hits} hits / {attempts} target-exposures, "
+                  f"{len(practiced_keys)} distinct sentences")
 
     mode = "full-duplex (voice barge-in)" if full_duplex else \
         "half-duplex (press Enter to interrupt)"
-    collected: list[np.ndarray] = []
     try:
         with sd.InputStream(samplerate=in_sr, channels=1, blocksize=block,
                             dtype="float32", callback=_cb):
-            print(f"\nReady. Just start talking. [{mode}]  Ctrl-C to quit.\n")
+            print(f"\nReady. Just start talking. [{mode}]  Say 'stop' or Ctrl-C to quit.\n")
             while True:
-                blk = audio_q.get()
                 now = time.monotonic()
+                blk = audio_q.get()
                 if not gate.capture_enabled(now):
                     continue
-                frame = _frame16(blk)
-                preroll.push(frame)
-                ev = endpoint.update(vad.prob(frame))
-                if ev == "start":
-                    collected = [preroll.get()]  # prepend pre-roll (no onset clip)
-                elif endpoint.state is VadState.SPEAKING:
-                    collected.append(frame)
-                elif ev == "end":
-                    collected.append(frame)
-                    utterance = np.concatenate(collected)
-                    collected = []
-                    endpoint.reset(); vad.reset()
-                    targets = select_targets(sentences, stats, n=n_targets)
-                    r = respond(utterance, history, targets, asr=asr, tts=tts,
-                                system_prompt=build_system_prompt(targets))
-                    if not r.user_text:
-                        continue
-                    print(f"you: {r.user_text}")
-                    print(f"ai : {r.reply_text}")
-                    if r.practiced_error:
-                        print(f"  (practiced-scoring unavailable: {r.practiced_error})")
-                    for h in r.practiced:
-                        st = stats.setdefault(_key(sentences, h.target), PracticeStat())
-                        st.count += 1; st.last_ts = time.time()
-                    history += [{"role": "user", "content": r.user_text},
-                                {"role": "assistant", "content": r.reply_text}]
-                    history = history[-12:]  # keep context short
-                    if r.reply_audio.size:
-                        play(r.reply_audio)
+                utterance = assembler.push(_frame16(blk))
+                if utterance is None:
+                    continue
+                t_end = time.monotonic()
+                targets = select_targets(sentences, stats, n=n_targets)
+                r = respond(utterance, history, targets, asr=asr, tts=tts,
+                            embed=ollama_embed, system_prompt=build_system_prompt(targets))
+                if not r.user_text:
+                    continue
+                print(f"you: {r.user_text}")
+                if is_stop(r.user_text):
+                    print("ai : Bye! Keep practicing.")
+                    _summary(); return 0
+                print(f"ai : {r.reply_text}")
+                if practiced_on and r.practiced_error:
+                    print(f"  (practiced-scoring error: {r.practiced_error})")
+                attempts += len(targets)
+                for h in r.practiced:
+                    hits += 1
+                    k = _key(sentences, h.target)
+                    practiced_keys.add(k)
+                    st = stats.setdefault(k, PracticeStat())
+                    st.count += 1; st.last_ts = time.time()
+                history += [{"role": "user", "content": r.user_text},
+                            {"role": "assistant", "content": r.reply_text}]
+                history = history[-12:]  # keep context short
+                if r.reply_audio.size:
+                    latencies.append(time.monotonic() - t_end)  # vad_end -> first audio
+                    play(r.reply_audio)
     except KeyboardInterrupt:
         print("\nBye! Keep practicing.")
-        return 0
+        _summary(); return 0
+    finally:
+        try:
+            out_stream.stop(); out_stream.close()
+        except Exception:
+            pass
 
 
 def _key(sentences, target_text):

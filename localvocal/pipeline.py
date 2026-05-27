@@ -16,6 +16,7 @@ D3 (score 'practiced' from the user's transcript vs the active targets).
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -38,7 +39,9 @@ class TurnResult:
     reply_chunks: list[str]
     reply_audio: np.ndarray
     practiced: list[PracticeHit] = field(default_factory=list)
-    ttft_s: float | None = None
+    ttft_s: float | None = None  # LLM time-to-first-token
+    asr_s: float = 0.0  # ASR transcription wall time
+    tts_s: float = 0.0  # TTS synthesis wall time
     practiced_error: str | None = None  # set if D3 scoring failed (surfaced, not swallowed)
 
 
@@ -55,9 +58,11 @@ def respond(
 ) -> TurnResult:
     """Run one full turn. `history` is prior [{role,content}] (NOT mutated here)."""
     empty = np.zeros(0, dtype=np.float32)
+    t0 = time.monotonic()
     user_text = asr.transcribe(user_audio_16k)
+    asr_s = time.monotonic() - t0
     if not user_text:
-        return TurnResult("", "", [], empty)
+        return TurnResult("", "", [], empty, asr_s=asr_s)
 
     system = system_prompt if system_prompt is not None else build_system_prompt(targets)
     messages = [{"role": "system", "content": system}, *history,
@@ -66,8 +71,10 @@ def respond(
 
     reply = sanitize_for_tts(result.text)
     chunks = chunk_sentences(reply)
+    t1 = time.monotonic()
     pieces = [tts.synth(c) for c in chunks] if chunks else []
     audio = np.concatenate(pieces) if pieces else empty
+    tts_s = time.monotonic() - t1
 
     practiced: list[PracticeHit] = []
     practiced_error: str | None = None
@@ -87,5 +94,7 @@ def respond(
         reply_audio=audio,
         practiced=practiced,
         ttft_s=result.ttft_s,
+        asr_s=asr_s,
+        tts_s=tts_s,
         practiced_error=practiced_error,
     )
