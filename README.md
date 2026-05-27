@@ -26,16 +26,18 @@ Fork & adapt [`eauchs/speech-to-speech-pipeline`](https://github.com/eauchs/spee
 | Stage | Choice | Device | Why |
 |---|---|---|---|
 | ASR | faster-whisper `small.en` | **CPU** (int8) | English-only, keeps GPU free |
-| LLM | Ollama `qwen3.5:4b` (warm, non-thinking) | **GPU** | 4B TTFT ≈ 350ms; latency-first |
-| TTS | Kokoro-82M via mlx-audio | **GPU** | RTF ≈ 0.03, natural enough, Apache-2.0 |
+| LLM | Ollama `qwen3.5:4b` (warm, non-thinking) | **GPU** | 4B 比 9B 首字更快；latency-first（实测为准） |
+| TTS | Kokoro-82M via mlx-audio | **GPU**（与 LLM 串行） | RTF ≈ 0.03, natural enough, Apache-2.0 |
 | VAD | Silero VAD | CPU | sub-second endpointing |
-| Glue | asyncio + sentence-chunked streaming TTS + barge-in | — | lowest perceived latency |
+| Glue | asyncio + sentence-chunked streaming TTS + half-duplex | — | lowest perceived latency |
 
-**关键设计取舍 / Key design decisions**
+**关键设计取舍 / Key design decisions**（经 Codex 对抗审查加固，详见 `docs/DESIGN.md` 的 v2 Hardening）
 - **不全用 MLX** — ASR 留在 CPU，避免 ASR+LLM+TTS 三者抢同一块 Metal GPU（尾延迟会涨 20-40%）。
-- **不打断的连续对话** — 循环常驻直到用户显式退出；VAD 收尾放宽，不切断用户。
+- **GPU 上 LLM 与 TTS 串行**，不并发——并发恰恰是 TTFT 抖动最严重的时刻。
+- **半双工默认**（TTS 播放时静音麦克风）根除外放回声；戴耳机可选全双工插话打断。
 - **不显式纠错** — 自然对话伙伴，靠地道措辞和复述潜移默化（纯语音闭环无法评判发音，这是固有边界）。
-- **保温 + 非思考模式** — `OLLAMA_KEEP_ALIVE=-1`，避免 30-60s 冷启动；`deepseek-r1` 类思考模型不适合语音。
+- **保温 + 非思考（结构性）** — `OLLAMA_KEEP_ALIVE=-1`；经 Ollama 原生 `think:false` + 探针验证无 `<think>` 块；`deepseek-r1` 类不适合语音。
+- **延迟靠实测** — 第一天埋 4 段时间戳出 p50/p95，`<1.5s` 是冲刺目标不是验收标准。
 
 完整设计与盲区清单见 [`docs/DESIGN.md`](docs/DESIGN.md)。
 Full design + risk/blind-spot list in [`docs/DESIGN.md`](docs/DESIGN.md).
