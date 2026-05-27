@@ -1,6 +1,6 @@
 """Tests for honest coverage scoring (cosine + anchor gate). Fake embed = no model."""
 
-from localvocal.coverage import CoverageTracker, extract_anchors
+from localvocal.coverage import CoverageTracker, extract_anchors, has_substance
 from localvocal.practice_item import PracticeItem
 
 
@@ -86,6 +86,17 @@ def test_coverage_is_sticky_and_cumulative_is_capped():
     cov = tr.score(it, "x" * (MAX_CUM_CHARS + 1000))  # truncates the anchor out
     assert len(cov.cumulative_answer) <= MAX_CUM_CHARS
     assert cov.bullets[0].status == "hit"  # sticky: a recalled point stays recalled
+
+
+def test_content_free_point_is_filtered_not_cosine_credited():
+    # an all-stopword "point" has nothing to recall -> never scored on cosine alone
+    assert not has_substance("the and of to")
+    assert has_substance("Built NPV engine") and has_substance("real communication")
+    it = PracticeItem(id="q", prompt="p", expected_points=["the and of to", "real pricing work"])
+    tr = CoverageTracker([it], embed=_kw_embed("pricing"), threshold=0.55)
+    cov = tr.score(it, "anything vaguely on topic about pricing")
+    assert len(cov.bullets) == 1  # only the substantive point is scored
+    assert cov.bullets[0].bullet == "real pricing work"
 
 
 def test_summary_counts():

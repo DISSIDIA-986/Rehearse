@@ -98,9 +98,9 @@ def test_extract_items_falls_back_on_bad_json():
 
 def test_extract_items_drops_empty_prompt_and_empty_points():
     fake = _json_chat({"items": [
-        {"prompt": "  ", "expected_points": ["x"]},      # empty prompt -> skipped
-        {"prompt": "noPoints", "expected_points": []},   # nothing to recall -> dropped
-        {"prompt": "real", "expected_points": ["a"]},    # kept
+        {"prompt": "  ", "expected_points": ["real point"]},  # empty prompt -> skipped
+        {"prompt": "noPoints", "expected_points": []},        # nothing to recall -> dropped
+        {"prompt": "real", "expected_points": ["a genuine fact"]},  # kept
     ]})
     items = extract_items("# H\n- x", chat_fn=fake)
     assert [it.prompt for it in items] == ["real"]
@@ -113,7 +113,7 @@ def test_load_caches_and_writes_agenda(tmp_path):
 
     def counting(messages, **kw):
         calls[0] += 1
-        return ChatResult(text=json.dumps({"items": [{"prompt": "P", "expected_points": ["x"]}]}),
+        return ChatResult(text=json.dumps({"items": [{"prompt": "P", "expected_points": ["real point"]}]}),
                           ttft_s=0.1, total_s=0.2, had_think_block=False)
 
     md = tmp_path / "doc.md"
@@ -124,7 +124,7 @@ def test_load_caches_and_writes_agenda(tmp_path):
     assert len(items1) == 1 and calls[0] == 1
     assert (tmp_path / "doc.md.recall.json").exists()  # C9 visible agenda
     agenda = json.loads((tmp_path / "doc.md.recall.json").read_text())
-    assert agenda[0]["prompt"] == "P" and agenda[0]["expected_points"] == ["x"]
+    assert agenda[0]["prompt"] == "P" and agenda[0]["expected_points"] == ["real point"]
 
     items2 = load_markdown(md, chat_fn=counting, cache_dir=cache)
     assert len(items2) == 1 and calls[0] == 1  # cache hit -> no new LLM call

@@ -19,6 +19,7 @@ import re
 from dataclasses import asdict
 from pathlib import Path
 
+from localvocal.coverage import has_substance
 from localvocal.llm_client import chat
 from localvocal.practice_item import PracticeItem
 
@@ -163,13 +164,16 @@ def extract_items(md_text: str, *, model: str = EXTRACT_MODEL, chat_fn=chat) -> 
             items.extend(chunk_items or _fallback_items(chunk, f"c{ci}"))
         except Exception:
             items.extend(_fallback_items(chunk, f"c{ci}"))
-    # Drop unscorable items (empty expected_points) AND dedupe by key — overlap
-    # windows on a huge section can yield the same item twice (C5 merge).
+    # Keep only substantive points (a content-free 'point' has nothing to recall),
+    # drop items left empty, and dedupe by key — overlap windows on a huge section
+    # can yield the same item twice (C5 merge).
     seen: set[str] = set()
     merged: list[PracticeItem] = []
     for it in items:
-        if it.expected_points and it.key not in seen:
+        pts = [p for p in it.expected_points if has_substance(p)]
+        if pts and it.key not in seen:
             seen.add(it.key)
+            it.expected_points = pts
             merged.append(it)
     return merged
 

@@ -64,6 +64,15 @@ def _content_words(text: str) -> set[str]:
     return {w for w in _WORD.findall(text.lower()) if w not in _STOP}
 
 
+def has_substance(point: str) -> bool:
+    """True if a point carries something recallable (a fact anchor or a content
+    word). A point that is only stopwords/punctuation is NOT a key point — it has
+    nothing to recall, so it must be filtered out rather than scored on cosine
+    alone (final-review: no fact gate is possible for it). Shared by the extractor
+    and the session so a content-free 'point' never reaches scoring."""
+    return bool(extract_anchors(point) or _content_words(point))
+
+
 _RANK = {"miss": 0, "partial": 1, "hit": 2}
 
 
@@ -114,15 +123,18 @@ class CoverageTracker:
         self.embed = embed
         self.threshold = threshold
         self._cum: dict[str, str] = {}
-        self._anchors = {it.key: [extract_anchors(p) for p in it.expected_points] for it in self.items}
-        self._cwords = {it.key: [_content_words(p) for p in it.expected_points] for it in self.items}
+        # score only substantive points (content-free 'points' have nothing to recall)
+        self._pts = {it.key: [p for p in it.expected_points if has_substance(p)] for it in self.items}
+        self._anchors = {k: [extract_anchors(p) for p in pts] for k, pts in self._pts.items()}
+        self._cwords = {k: [_content_words(p) for p in pts] for k, pts in self._pts.items()}
         self._bullet_vecs: dict[str, list] = {}  # lazy per-item cache
         self._best: dict[str, list[BulletScore]] = {}  # sticky best score per bullet
         self.results: dict[str, ItemCoverage] = {}
 
     def _bvecs(self, item: PracticeItem):
         if item.key not in self._bullet_vecs:
-            self._bullet_vecs[item.key] = self.embed(item.expected_points) if item.expected_points else []
+            pts = self._pts.get(item.key, [])
+            self._bullet_vecs[item.key] = self.embed(pts) if pts else []
         return self._bullet_vecs[item.key]
 
     def _score_bullet(self, pt, bvec, anchors, cwords, user_vec, ans_anchors, ans_cwords) -> BulletScore:
@@ -156,7 +168,8 @@ class CoverageTracker:
         cum = (self._cum.get(item.key, "") + " " + (user_text or "")).strip()
         cum = cum[-MAX_CUM_CHARS:]  # bound re-embed cost; sticky scores below keep prior hits
         self._cum[item.key] = cum
-        if not item.expected_points:
+        pts = self._pts.get(item.key, [])
+        if not pts:
             cov = ItemCoverage(item.key, item.section, cum, [])
             self.results[item.key] = cov
             return cov
@@ -167,7 +180,7 @@ class CoverageTracker:
         fresh = [
             self._score_bullet(pt, bvec, anchors, cwords, user_vec, cum_anchors, cum_cwords)
             for pt, bvec, anchors, cwords in zip(
-                item.expected_points, self._bvecs(item),
+                pts, self._bvecs(item),
                 self._anchors[item.key], self._cwords[item.key])
         ]
         prev = self._best.get(item.key)
@@ -186,7 +199,7 @@ class CoverageTracker:
         return cov
 
     def summary(self) -> Summary:
-        total = sum(len(it.expected_points) for it in self.items)
+        total = sum(len(self._pts.get(it.key, [])) for it in self.items)
         hit = sum(1 for cov in self.results.values() for b in cov.bullets if b.status == "hit")
         sec_hit: dict[str, int] = defaultdict(int)
         sec_tot: dict[str, int] = defaultdict(int)

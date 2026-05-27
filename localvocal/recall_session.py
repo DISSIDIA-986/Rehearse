@@ -21,7 +21,7 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from localvocal.coverage import CoverageTracker
+from localvocal.coverage import CoverageTracker, has_substance
 from localvocal.practice_item import PracticeItem
 
 _WS = re.compile(r"\s+")
@@ -100,7 +100,8 @@ class RecallSession:
     _done: bool = False
 
     def __post_init__(self):
-        self.items = [it for it in self.items if it.expected_points]
+        # an item needs at least one substantive (recallable) point to drill
+        self.items = [it for it in self.items if any(has_substance(p) for p in it.expected_points)]
         if self.tracker is None:
             self.tracker = CoverageTracker(self.items)
         self._done = not self.items

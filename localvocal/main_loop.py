@@ -480,7 +480,7 @@ def run_recall(path: str, model: str, voice: str, asr_model: str,
     except Exception as e:
         print(f"sounddevice unavailable ({e}). Install: uv sync --extra audio", file=sys.stderr)
         return 1
-    from localvocal.coverage import CoverageTracker
+    from localvocal.coverage import CoverageTracker, has_substance
     from localvocal.markdown_extractor import load_markdown
     from localvocal.pipeline import speak_turn
     from localvocal.recall_session import RecallSession
@@ -496,7 +496,7 @@ def run_recall(path: str, model: str, voice: str, asr_model: str,
     except Exception as e:
         print(f"Could not read/extract {path}: {e}", file=sys.stderr)
         return 1
-    items = [it for it in items if it.expected_points]
+    items = [it for it in items if any(has_substance(p) for p in it.expected_points)]
     if not items:
         print("No recallable content found in that document.", file=sys.stderr)
         return 1
