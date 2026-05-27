@@ -338,6 +338,53 @@ COVERAGE: 0/~16 (greenfield). Deterministic ~100%; extraction/coach via real Oll
 - Lane C (scoring): T4 (depends on T2). B and C parallel after T2.
 - Lane D: T5 → T6 (depend on T2/T3/T4). Conflict: T1/T5 both touch main_loop → coordinate.
 
+### Fidelity-review corrections (Codex, 2026-05-27) — AUTHORITATIVE over the lock above
+
+Codex requirement-fidelity review verdict: NO (drifted). Corrections, all accepted:
+
+- **C1 Generic recall, not interview-first.** Mode = generic **recall** mode; `recall_session`
+  + a generic **recall coach** persona. Interview is just one `content_type`; Phase 1 supports
+  ARBITRARY content (terminology, conference summary, notes, resume, interview) by reducing any
+  doc to key-point recall items. Drop the interview-first framing/names.
+- **C2 Phase 1 = key-point recall ONLY.** Prepared-speech VERBATIM recitation is a different
+  mode (deferred). No `verbatim_script` drilling, no "reveal the whole script." Goal stays:
+  recall & elaborate key points from memory.
+- **C3 Do NOT refactor the English/respond() path.** Instead extract a lower-level
+  `speak_turn()` primitive (ASR→LLM→TTS, NO scoring). `respond()` keeps its exact signature +
+  practiced scoring and just calls `speak_turn()` internally — English behavior IDENTICAL, the
+  87 tests stay green. `recall_session` also calls `speak_turn()` + its own coverage scoring +
+  state. This is the real non-interference the user asked for. (Supersedes D2's "move scoring out".)
+- **C4 Cut extractor scope (KISS).** Minimal JSON schema: `{prompt, expected_points[],
+  support_snippets[], section}`. DROP `content_type` classification AND LLM-emitted
+  `required_anchors` from Phase 1 (smaller schema → far more reliable 9b JSON). Anchors are
+  derived DETERMINISTICALLY at scoring time (regex: numbers / acronyms / Capitalized terms /
+  dates). Persona = generic recall coach + `--persona` override.
+- **C5 Robust chunking.** Chunk by a char/token size budget with overlap; heading-aware when
+  headings exist, size-based fallback for flat terminology lists / dense prose. Don't assume `##`.
+- **C6 No answer leakage (preserve "from memory").** Default turn context = the QUESTION only.
+  `expected_points` are used for SCORING inside the session and are NOT shown to the coach LLM.
+  `support_snippets` are withheld until the user explicitly stalls or asks for a hint. The coach
+  probes generically ("tell me more about X"), never reads the bullets out.
+- **C7 Coverage in a neutral module.** `coverage.py` owns coverage logic; factor `cosine` +
+  `ollama_embed` into a neutral `embeddings.py` and reuse those only; do NOT couple to
+  `practiced_scorer`'s 0.50 sentence threshold — recalibrate for bullet recall.
+- **C8 App-local cache** (gitignored `.cache/localvocal/`, keyed by file-content hash), not `~/.gstack`.
+- **C9 Extraction transparency = a feature.** On load, write the extracted agenda to a stable
+  user-visible file next to the doc (`<doc>.recall.json`) AND print a one-line summary, so the
+  user can inspect/trust what will be drilled — not hidden in cache/--debug.
+- **Factual fixes:** `llm_client.chat` has NO `format` param today (add a JSON/format option in
+  T3); `prompt_builder` is hardcoded casual and literally says "do NOT quiz them" — the
+  recall-coach prompt is NEW, not an existing variant.
+
+**Revised tasks (supersede T1-T6 above):**
+- T1 — extract `speak_turn()` primitive; `respond()` calls it; English behavior unchanged; 87 tests green.
+- T2 — `practice_item.py`: PracticeItem + Sentence adapter + units.
+- T3 — `markdown_extractor.py`: size-budget chunk + Ollama JSON (new `chat(format=...)`); minimal
+  schema; app-local hash cache; write visible `<doc>.recall.json`; fallback. Integ on both samples.
+- T4 — `coverage.py` + `embeddings.py`: deterministic regex anchors + cosine + cumulative; recalibrate.
+- T5 — `recall_session` + generic recall-coach persona (question-only context, no leak); agenda advance; summary.
+- T6 — CLI `--content markdown --path [--persona] [--mode]` + transparency print + `--debug`.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
