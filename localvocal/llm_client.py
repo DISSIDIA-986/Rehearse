@@ -107,18 +107,24 @@ def chat(
     temperature: float = 0.7,
     think: bool = False,
     keep_alive: int | str = -1,
+    fmt: str | dict | None = None,
 ) -> ChatResult:
-    """Send a chat turn to Ollama (streaming) and return the full reply + timing."""
-    payload = json.dumps(
-        {
-            "model": model,
-            "messages": messages,
-            "stream": True,
-            "think": think,
-            "keep_alive": keep_alive,
-            "options": {"temperature": temperature, "num_predict": num_predict},
-        }
-    ).encode()
+    """Send a chat turn to Ollama (streaming) and return the full reply + timing.
+
+    fmt -> Ollama `format` (e.g. "json" or a JSON schema dict) for structured
+    output; used by the markdown extractor to get reliable JSON.
+    """
+    body_obj = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+        "think": think,
+        "keep_alive": keep_alive,
+        "options": {"temperature": temperature, "num_predict": num_predict},
+    }
+    if fmt is not None:
+        body_obj["format"] = fmt
+    payload = json.dumps(body_obj).encode()
     req = urllib.request.Request(
         f"{host}/api/chat",
         data=payload,
