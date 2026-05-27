@@ -23,6 +23,7 @@ from localvocal.llm_client import chat
 from localvocal.practice_item import PracticeItem
 
 EXTRACT_MODEL = "qwen3.5:9b"  # one-time, accuracy > speed; --extract-model overrides
+EXTRACTOR_VERSION = 2  # bump when prompt/schema/parse logic changes -> invalidates cache
 _CACHE_DIR = Path.home() / ".cache" / "localvocal" / "recall"
 MAX_CHUNK_CHARS = 4000
 CHUNK_OVERLAP = 200
@@ -124,6 +125,12 @@ def _fallback_items(chunk: str, prefix: str) -> list[PracticeItem]:
         elif _BULLET_LINE.match(s):
             bullets.append(_BULLET_LINE.sub("", s))
     flush()
+    if not items:
+        # pure prose (no headings/bullets) — don't lose it: each non-empty line a point
+        lines = [ln.strip() for ln in chunk.splitlines() if ln.strip()]
+        if lines:
+            items.append(PracticeItem(id=f"{prefix}.prose", prompt="Recall the key points here",
+                                      expected_points=lines[:8]))
     return items
 
 
@@ -153,32 +160,54 @@ def extract_items(md_text: str, *, model: str = EXTRACT_MODEL, chat_fn=chat) -> 
             items.extend(chunk_items or _fallback_items(chunk, f"c{ci}"))
         except Exception:
             items.extend(_fallback_items(chunk, f"c{ci}"))
-    # A recall item with nothing to recall (e.g. a name/title header the LLM
-    # over-extracted) is useless and unscorable — drop empty-expected_points items.
-    return [it for it in items if it.expected_points]
+    # Drop unscorable items (empty expected_points) AND dedupe by key — overlap
+    # windows on a huge section can yield the same item twice (C5 merge).
+    seen: set[str] = set()
+    merged: list[PracticeItem] = []
+    for it in items:
+        if it.expected_points and it.key not in seen:
+            seen.add(it.key)
+            merged.append(it)
+    return merged
 
 
 def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+def _write_agenda(path: Path, items: list[PracticeItem]) -> None:
+    """C9 transparency: a visible agenda beside the doc. Best-effort + atomic —
+    a read-only/synced source folder must NOT abort loading."""
+    agenda = [{"prompt": it.prompt, "expected_points": it.expected_points,
+               "section": it.section} for it in items]
+    target = path.with_name(path.name + ".recall.json")
+    try:
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_text(json.dumps(agenda, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(target)
+    except OSError:
+        pass  # transparency is a nicety; never fail the session over it
+
+
 def load_markdown(path, *, model: str = EXTRACT_MODEL, chat_fn=chat,
                   cache_dir=_CACHE_DIR, write_agenda: bool = True) -> list[PracticeItem]:
-    """Load + extract (cached by file-content hash). Writes a visible agenda next
-    to the doc unless write_agenda=False."""
+    """Load + extract recall items. Cached by (extractor version, model, content)
+    so a model/prompt/schema change re-extracts instead of replaying stale items.
+    Writes a visible agenda on BOTH cache hit and miss (C9)."""
     path = Path(path)
     text = path.read_text(encoding="utf-8")
     cache_dir = Path(cache_dir)
-    cache = cache_dir / f"{_hash(text)}.json"
-    if cache.exists():
-        return [PracticeItem(**d) for d in json.loads(cache.read_text(encoding="utf-8"))]
+    cache = cache_dir / f"{_hash(f'{EXTRACTOR_VERSION}|{model}|{text}')}.json"
 
-    items = extract_items(text, model=model, chat_fn=chat_fn)
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps([asdict(it) for it in items], ensure_ascii=False), encoding="utf-8")
-    if write_agenda:  # C9: transparency — user-visible agenda beside the doc
-        agenda = [{"prompt": it.prompt, "expected_points": it.expected_points,
-                   "section": it.section} for it in items]
-        path.with_name(path.name + ".recall.json").write_text(
-            json.dumps(agenda, ensure_ascii=False, indent=2), encoding="utf-8")
+    if cache.exists():
+        items = [PracticeItem(**d) for d in json.loads(cache.read_text(encoding="utf-8"))]
+    else:
+        items = extract_items(text, model=model, chat_fn=chat_fn)
+        if items:  # never cache an empty result from a transient LLM/JSON failure
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps([asdict(it) for it in items], ensure_ascii=False),
+                             encoding="utf-8")
+
+    if write_agenda:
+        _write_agenda(path, items)
     return items
