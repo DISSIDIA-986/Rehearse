@@ -55,6 +55,19 @@ uv run localvocal                        # the live voice loop — just start ta
 uv run localvocal --full-duplex          # voice barge-in (use with AirPods/headphones)
 ```
 
+**If it feels too rushed (cuts you off while thinking):**
+```bash
+uv run localvocal --end-silence-ms 1500  # wait longer for you to finish (default 1000)
+uv run localvocal --manual-turns         # press Enter to start/stop each turn — zero time pressure
+```
+**If recognition is inaccurate (accent / noise):** ASR now uses `vad_filter` +
+`beam_size=5` by default. If still off, use a bigger model (slower, more accurate):
+```bash
+uv run localvocal --asr-model medium.en        # ~2.3s ASR vs ~0.9s for small.en
+uv run localvocal --asr-model distil-large-v3  # most accurate
+uv run localvocal --debug                # save each turn's audio+transcript to debug/ to inspect
+```
+
 Defaults: half-duplex (mute mic while the assistant speaks — works on the Mac
 speaker without echo), continuous until you say "stop" or hit Ctrl-C, press Enter
 to cut off a reply. On exit it prints latency p50/p95 and your practiced count.
