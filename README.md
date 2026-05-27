@@ -51,8 +51,17 @@ XML decks in `data/`. First run downloads the Whisper / Kokoro / spaCy models
 ```bash
 uv sync --extra audio --extra vad        # install ASR/TTS/VAD (one time)
 uv run localvocal --smoke                # health check, no mic (recommended first)
+uv run localvocal --menu                 # interactive menu — pick a mode, no flags to memorize
 uv run localvocal                        # the live voice loop — just start talking
 uv run localvocal --full-duplex          # voice barge-in (use with AirPods/headphones)
+```
+
+**Shortcut:** add a `lv` alias so you can launch the menu from anywhere without
+typing the long command (`lv` runs in a subshell, so your current directory is
+unchanged):
+```bash
+echo "alias lv='(cd $(pwd) && uv run localvocal --menu)'" >> ~/.zshrc && source ~/.zshrc
+lv   # opens the menu: English practice / Markdown recall / smoke / quit
 ```
 
 **If it feels too rushed (cuts you off while thinking):**

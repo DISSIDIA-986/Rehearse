@@ -609,6 +609,58 @@ def run_recall(path: str, model: str, voice: str, asr_model: str,
     return 0
 
 
+_MENU = """\
+LocalVocal — pick a mode:
+  1) English conversation practice (auto: just talk, VAD ends your turn)
+  2) English practice — manual turns (Enter to start/stop, no time pressure)
+  3) English practice — manual + brief replies (snappier, you talk more)
+  4) Markdown recall — recall a doc from memory (you'll enter its path)
+  5) Smoke test — health checks, no microphone
+  6) Quit"""
+
+
+def build_menu_argv(choice: str, path: str | None = None) -> list[str] | None:
+    """Map a menu choice to the argv main() already understands. None = no launch
+    (quit or invalid). Pure, so it's unit-testable without a mic."""
+    return {
+        "1": [],
+        "2": ["--manual-turns"],
+        "3": ["--manual-turns", "--brief"],
+        "4": ["--content", "markdown", "--path", path or ""],
+        "5": ["--smoke"],
+    }.get(choice)
+
+
+def run_menu() -> int:
+    """Interactive launcher menu — the short way in (see the `lv` alias). Reads a
+    choice, then dispatches through main() so every mode/flag stays in one place."""
+    print(_MENU)
+    while True:
+        try:
+            choice = input("Select [1-6]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if choice == "6":
+            return 0
+        if choice == "4":
+            try:
+                raw = input("Absolute path to the markdown file: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return 0
+            path = str(Path(raw).expanduser())
+            if not Path(path).is_file():
+                print(f"  No such file: {path}\n")
+                continue
+            return main(build_menu_argv("4", path))
+        argv = build_menu_argv(choice)
+        if argv is None:
+            print("  Please enter a number from 1 to 6.\n")
+            continue
+        return main(argv)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="localvocal", description=__doc__)
     ap.add_argument("--content", choices=["english", "markdown"], default="english",
@@ -636,7 +688,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="save each turn's audio + transcript to debug/ for diagnosis")
     ap.add_argument("--smoke", action="store_true",
                     help="run health checks + TTS->ASR round-trip, then exit (no mic)")
+    ap.add_argument("--menu", action="store_true",
+                    help="interactive launcher menu (used by the `lv` alias)")
     args = ap.parse_args(argv)
+
+    if args.menu:
+        return run_menu()
 
     if args.content == "markdown":
         if not args.path:
