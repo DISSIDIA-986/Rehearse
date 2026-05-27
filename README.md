@@ -61,14 +61,14 @@ uv run rehearse                        # the live voice loop — just start talk
 uv run rehearse --full-duplex          # voice barge-in (use with AirPods/headphones)
 ```
 
-**Shortcut:** add a `lv` alias so you can launch the menu from anywhere without
-typing the long command (`lv` runs in a subshell, so your current directory is
+**Shortcut:** add a `rehearse` alias so you can launch the menu from anywhere without
+typing the long command (`rehearse` runs in a subshell, so your current directory is
 unchanged). Run this **from the repo root** — it bakes in the repo's absolute,
 quoted path:
 ```bash
 cd /path/to/Rehearse   # the cloned repo (so $(pwd) below is correct)
-echo "alias lv='(cd \"$(pwd)\" && uv run rehearse --menu)'" >> ~/.zshrc && source ~/.zshrc
-lv   # opens the menu: English practice / Markdown recall / smoke / quit
+echo "alias rehearse='(cd \"$(pwd)\" && uv run rehearse --menu)'" >> ~/.zshrc && source ~/.zshrc
+rehearse   # opens the menu: English practice / Markdown recall / smoke / quit
 ```
 
 **If it feels too rushed (cuts you off while thinking):**
@@ -123,7 +123,7 @@ full-turn tests).
   "practiced" scoring, latency instrumentation, native smoke test.
 - **Phase 2:** ✅ markdown-recall mode — recall any markdown doc from memory via
   local-LLM extraction + honest (cosine + fact-anchor) coverage scoring. Plus an
-  interactive launcher menu (`--menu`) and a `lv` alias. The menu's *live status
+  interactive launcher menu (`--menu`) and a `rehearse` alias. The menu's *live status
   display* (running-session stats) is still deferred.
 - **Later:** 用 `nomic-embed-text` + `bce-reranker` 做语义检索，按话题动态调相关句子 + 跨会话间隔复习排程（见 `TODOS.md`）。
 

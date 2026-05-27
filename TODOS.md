@@ -29,7 +29,7 @@
 - **Depends on:** MVP 稳定。
 
 ### T-P2-4: 启动菜单的运行时实时状态显示（live status TUI）
-- **What:** F2 已交付 `--menu` 选择式启动器 + `lv` alias；剩下 F1 设想的"运行中实时状态"——
+- **What:** F2 已交付 `--menu` 选择式启动器 + `rehearse` alias；剩下 F1 设想的"运行中实时状态"——
   会话进行时显示延迟、覆盖度/练过计数、当前 item 等的 TUI 状态栏。
 - **Why:** 用户每天在 Ghostty 里跑，想边练边看进度，不必等结束才看 summary。
 - **Pros:** 复用现有 summary 数据；菜单已搭好入口。

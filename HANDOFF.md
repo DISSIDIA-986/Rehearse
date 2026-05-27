@@ -9,12 +9,12 @@ v1 (English conversation practice, Phases A–G) built, each phase gated by a Co
 adversarial review + a final comprehensive review (ship-blocker fixed). Then **F2
 markdown-recall mode** (recall any markdown doc from memory; honest cosine+anchor
 coverage scoring; coach persona that can't leak answers) + an interactive launcher
-menu (`--menu`) and `lv` alias — each also gated by Codex review (T3/T4 checkpoints
+menu (`--menu`) and `rehearse` alias — each also gated by Codex review (T3/T4 checkpoints
 + a final + a menu review, all findings fixed).
 **145 tests pass; `uv run rehearse --smoke` PASS** (1843 sentences, qwen3.5:4b
 non-thinking, TTS→ASR verbatim, nomic-embed + Silero up).
 The ONLY remaining manual step is the real-microphone run (this environment has no
-mic): `uv run rehearse` (or `lv`) — see README "Run". Everything mic-less is automated.
+mic): `uv run rehearse` (or `rehearse`) — see README "Run". Everything mic-less is automated.
 Deferred: the menu's live status display (running-session stats).
 
 ## 用户的执行指令（权威）
