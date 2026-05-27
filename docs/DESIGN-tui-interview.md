@@ -28,6 +28,37 @@ Sample docs (very different shapes):
 - `…/portfolio2/resume/ai-engineer.md` — `##` sections → `**bold**` job/project headers → `-` bullets (75 lines)
 - `…/JobPilot/NeoFinancial/CTO-call-prep.md` — `Q1 —` questions, `-` answer bullets, `>` verbatim scripts, one-page call sheet, glossary/meta sections (387 lines / 33KB)
 
+## Refinement (2026-05-27): arbitrary content via LLM extraction — AUTHORITATIVE over the regex-parser parts below
+
+The content is NOT limited to interview/resume. It can be a terminology glossary, a
+conference summary, a prepared speech, study notes — any Markdown, with a **dynamic,
+unfixable outline**. So we do NOT write per-shape regex parsers (resume vs Q&A); that
+was too rigid and would choke on real docs anyway.
+
+Instead: **on load, the local Ollama LLM summarizes the arbitrary Markdown into a
+structured list of `PracticeItem`s** (JSON: each item = `{prompt/question,
+expected_points[], support_snippets[], section, tags}`). This is a ONE-TIME extraction
+(not per-turn) so latency is irrelevant — can use a bigger model (e.g. qwen3.5:9b) and
+chunk a long doc by top-level section, extract per chunk, then merge. Cache the items +
+their nomic embeddings keyed by file hash so reload is instant and offline.
+
+Implications for the design below:
+- `markdown_loader` becomes an **LLM extractor** (`content_extractor.py`): MD → chunk →
+  LLM(JSON practice items) → merge → embed → cache. The "structured dual-path regex
+  parser" and "skip glossary/meta" heuristics are REPLACED by the LLM deciding what is a
+  drill target. (Keep a trivial fallback: if the LLM/JSON fails, treat each heading+bullets
+  block as one item.)
+- Persona generalizes from "interviewer" to a **configurable recall coach**: interview /
+  study (terminology) / speech-rehearsal. Either a `--persona` flag or the extractor infers
+  a `content_type` and the prompt adapts. The drill loop (ask → recall from memory → score
+  coverage → follow up on gaps) is the SAME across content types.
+- Everything else from the joint review stays: `PracticeItem` layer, per-item drilling
+  (never blob the whole doc), coverage scoring with anchor checks (not vibes), reuse the
+  speech stack, ship F2 on the CLI first.
+- New risk: **LLM extraction quality + JSON reliability** on the local model. Validate the
+  JSON (structured output / instructor-style), cap items, and `--debug` the extracted items
+  so the user can eyeball what got pulled. This replaces the "messy-doc regex" risk.
+
 ## What Makes This Cool
 
 Turns a static prep doc into a **spoken recall drill**: the assistant interviews you on
