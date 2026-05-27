@@ -2,7 +2,7 @@
 name = "localvocal"
 version = "0.1.0"
 description = "Local, offline, free English speaking-practice voice assistant for Apple Silicon"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"  # kokoro-onnx / model deps not yet on 3.14
 dependencies = []
 
 [dependency-groups]
