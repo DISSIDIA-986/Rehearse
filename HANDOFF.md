@@ -1,7 +1,7 @@
-# HANDOFF — LocalVocal autonomous build
+# HANDOFF — Rehearse autonomous build
 
 > 交接给后续会话/agent。目标：**自主分阶段实现到底**，阶段间做对抗审查，无需人工确认。
-> Last updated: 2026-05-27 by Claude (Opus 4.7). Repo: https://github.com/DISSIDIA-986/LocalVocal
+> Last updated: 2026-05-27 by Claude (Opus 4.7). Repo: https://github.com/DISSIDIA-986/Rehearse
 
 ## ✅ STATUS: v1 + F2 markdown-recall mode shipped
 
@@ -11,10 +11,10 @@ markdown-recall mode** (recall any markdown doc from memory; honest cosine+ancho
 coverage scoring; coach persona that can't leak answers) + an interactive launcher
 menu (`--menu`) and `lv` alias — each also gated by Codex review (T3/T4 checkpoints
 + a final + a menu review, all findings fixed).
-**145 tests pass; `uv run localvocal --smoke` PASS** (1843 sentences, qwen3.5:4b
+**145 tests pass; `uv run rehearse --smoke` PASS** (1843 sentences, qwen3.5:4b
 non-thinking, TTS→ASR verbatim, nomic-embed + Silero up).
 The ONLY remaining manual step is the real-microphone run (this environment has no
-mic): `uv run localvocal` (or `lv`) — see README "Run". Everything mic-less is automated.
+mic): `uv run rehearse` (or `lv`) — see README "Run". Everything mic-less is automated.
 Deferred: the menu's live status display (running-session stats).
 
 ## 用户的执行指令（权威）
@@ -45,11 +45,11 @@ Deferred: the menu's live status display (running-session stats).
 - Apple M1 Max, 32GB。uv 0.8.0, Python 3.13, Homebrew, Ollama（`qwen3.5:4b` 已拉，**用它，不是 9b**；非思考模式）。
 - 关键坑：① 不全用 MLX（ASR 留 CPU 避免 GPU 争用）② 单音频设备 48k→16k/24k 一次性重采样，绝不每轮重开
   ③ `OLLAMA_KEEP_ALIVE=-1` 防冷启动 ④ think:false 必须经探针验证无 `<think>` 块 ⑤ `deepseek-r1` 不用（思考模型）。
-- 跑测试：`uv run pytest`。跑解析器：`uv run python -m localvocal.anki_loader data/*.xml`。
+- 跑测试：`uv run pytest`。跑解析器：`uv run python -m rehearse.anki_loader data/*.xml`。
 
 ## Anki 数据（私有，gitignored 在 `data/`）
 
-AnkiApp XML 格式。`localvocal/anki_loader.py` 已解析（详见其 docstring）：
+AnkiApp XML 格式。`rehearse/anki_loader.py` 已解析（详见其 docstring）：
 forgettable1105.xml(718) + GoogleNews.xml(1148) → 1843 unique，1136 带中文，810 带地道改写。
 `lang` 属性会说谎，角色按内容判（CJK→translation，差异英文字段→native）。
 
