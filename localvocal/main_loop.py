@@ -16,6 +16,7 @@ import glob
 import sys
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -440,8 +441,182 @@ def run_manual(decks: list[str], model: str, voice: str, n_targets: int,
     return 0
 
 
+RECALL_NUM_PREDICT = 120  # coach replies stay short (their turn to talk, not the AI's)
+
+
+def _startup_recall(model: str, voice: str, asr_model: str):
+    """Startup for markdown-recall mode: warm LLM/ASR/TTS + require embeddings
+    (coverage scoring is the whole point here). Returns (asr, tts, embed) or None."""
+    print(f"Warming up {model} + ASR/TTS (first run / cold model can take 30-60s)...")
+    try:
+        warmup(model=model)
+        think_probe(model=model)
+        asr, tts = _load_models(asr_model, voice)
+        _warm = audio_io.resample(tts.synth("Let's begin."), tts.sr, audio_io.ASR_SR)
+        asr.transcribe(_warm)
+    except Exception as e:
+        print(f"Startup failed: {e}", file=sys.stderr)
+        return None
+    from localvocal.embeddings import ollama_embed
+    try:
+        ollama_embed(["ping"])
+    except Exception as e:
+        print(f"nomic-embed unreachable: {e}. Recall scoring needs it — "
+              f"start Ollama / `ollama pull nomic-embed-text`.", file=sys.stderr)
+        return None
+    return asr, tts, ollama_embed
+
+
+def run_recall(path: str, model: str, voice: str, asr_model: str,
+               extract_model: str, debug: bool) -> int:  # pragma: no cover - needs a microphone
+    """Markdown-recall mode: walk an agenda extracted from a doc, interviewing the
+    user to recall each item FROM MEMORY (manual turns — recall needs thinking time,
+    no VAD pressure). Separate from the English path; shares only speak_turn()."""
+    import functools
+    import queue
+
+    try:
+        import sounddevice as sd
+    except Exception as e:
+        print(f"sounddevice unavailable ({e}). Install: uv sync --extra audio", file=sys.stderr)
+        return 1
+    from localvocal.coverage import CoverageTracker
+    from localvocal.markdown_extractor import load_markdown
+    from localvocal.pipeline import speak_turn
+    from localvocal.recall_session import RecallSession
+
+    started = _startup_recall(model, voice, asr_model)
+    if started is None:
+        return 1
+    asr, tts, embed = started
+
+    print(f"Extracting recall items from {path} (one-time, {extract_model})...")
+    try:
+        items = load_markdown(path, model=extract_model)
+    except Exception as e:
+        print(f"Could not read/extract {path}: {e}", file=sys.stderr)
+        return 1
+    items = [it for it in items if it.expected_points]
+    if not items:
+        print("No recallable content found in that document.", file=sys.stderr)
+        return 1
+    agenda = Path(path).name + ".recall.json"
+    print(f"Loaded {len(items)} recall items. Agenda written to {agenda} (C9: "
+          f"open it to see exactly what will be drilled).")  # transparency
+
+    session = RecallSession(items, tracker=CoverageTracker(items, embed=embed),
+                            source_title=items[0].source_title or Path(path).stem)
+    coach_chat = functools.partial(chat, model=model)
+
+    try:
+        in_sr = int(sd.query_devices(kind="input")["default_samplerate"])
+        out_sr = int(sd.query_devices(kind="output")["default_samplerate"])
+    except Exception:
+        in_sr = out_sr = audio_io.DEFAULT_DEVICE_SR
+    block = max(1, round(FRAME * in_sr / audio_io.ASR_SR))
+    debug_dir = "recall-debug" if debug else None
+
+    audio_q: queue.Queue = queue.Queue(maxsize=8000)
+    recording = threading.Event()
+
+    def _cb(indata, frames, time_info, status):
+        if recording.is_set():
+            try:
+                audio_q.put_nowait(audio_io.to_mono(indata).copy())
+            except queue.Full:
+                pass
+
+    out_stream = sd.OutputStream(samplerate=out_sr, channels=1, dtype="float32")
+    out_stream.start()
+
+    def say(text: str) -> None:
+        from localvocal.sentence_chunker import chunk_sentences
+        from localvocal.text_sanitize import sanitize_for_tts
+        for c in chunk_sentences(sanitize_for_tts(text)):
+            out_stream.write(audio_io.resample(tts.synth(c), tts.sr, out_sr))
+
+    def _record_utterance() -> np.ndarray | None:
+        while not audio_q.empty():
+            audio_q.get_nowait()
+        recording.set()
+        input("[recording... Enter when you're done] ")
+        recording.clear()
+        blocks = []
+        try:
+            while True:
+                blocks.append(audio_q.get_nowait())
+        except queue.Empty:
+            pass
+        if not blocks:
+            return None
+        return audio_io.resample(np.concatenate(blocks), in_sr, audio_io.ASR_SR)
+
+    history: list[dict[str, str]] = []
+    print("\nRecall mode: Enter to speak your answer, Enter again to send. "
+          "Pause to think freely. Say or type 's'+Enter to quit.\n")
+    opening = session.opening_line()
+    print(f"ai : {opening}")
+    say(opening)
+    try:
+        with sd.InputStream(samplerate=in_sr, channels=1, blocksize=block,
+                            dtype="float32", callback=_cb):
+            while not session.done:
+                if input("[Enter to answer] ").strip().lower() == "s":
+                    break
+                utterance = _record_utterance()
+                if utterance is None:
+                    print("(heard nothing — try again)\n"); continue
+                prompt = session.coach_prompt()
+                st = speak_turn(utterance, history, asr=asr, tts=tts,
+                                system_prompt=prompt, chat_fn=coach_chat,
+                                num_predict=RECALL_NUM_PREDICT)
+                if not st.user_text:
+                    print("(heard nothing — try again)\n"); continue
+                print(f"you: {st.user_text}")
+                if is_stop(st.user_text):
+                    break
+                out = session.record(st.user_text)
+                cov = out.coverage
+                hit = sum(1 for b in cov.bullets if b.status == "hit") if cov else 0
+                tot = len(cov.bullets) if cov else 0
+                n, total = session.progress()
+                tag = "✓ complete" if (cov and cov.complete) else f"{hit}/{tot} points"
+                flags = (" [hint]" if out.gave_hint else "") + (" →next" if out.advanced else "")
+                print(f"ai : {st.reply_text}")
+                print(f"     [{n}/{total}] {tag}{flags}")
+                if debug_dir:
+                    _save_debug(debug_dir, utterance, st.user_text, st.reply_text,
+                                f"item={cov.item_key if cov else '-'} {tag}{flags} "
+                                f"asr={st.asr_s:.2f}s tts={st.tts_s:.2f}s")
+                history += [{"role": "user", "content": st.user_text},
+                            {"role": "assistant", "content": st.reply_text}]
+                history = history[-12:]
+                if st.reply_audio.size:
+                    out_stream.write(audio_io.resample(st.reply_audio, tts.sr, out_sr))
+                print()
+            closing = "That's the whole agenda — nicely done." if session.done \
+                else "Let's stop there."
+            print(f"ai : {closing}")
+            say(closing)
+    except (KeyboardInterrupt, EOFError):
+        pass
+    finally:
+        try:
+            out_stream.stop(); out_stream.close()
+        except Exception:
+            pass
+    print(f"\nRecall summary: {session.summary()}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="localvocal", description=__doc__)
+    ap.add_argument("--content", choices=["english", "markdown"], default="english",
+                    help="english = Anki conversation practice; markdown = recall a doc from memory")
+    ap.add_argument("--path", default=None,
+                    help="absolute path to the markdown file to recall (with --content markdown)")
+    ap.add_argument("--extract-model", default=None,
+                    help="LLM for one-time markdown->agenda extraction (default: accuracy model)")
     ap.add_argument("--decks", nargs="*", default=None,
                     help="AnkiApp XML deck files (default: data/*.xml)")
     ap.add_argument("--model", default=DEFAULT_MODEL)
@@ -462,6 +637,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--smoke", action="store_true",
                     help="run health checks + TTS->ASR round-trip, then exit (no mic)")
     args = ap.parse_args(argv)
+
+    if args.content == "markdown":
+        if not args.path:
+            print("--content markdown needs --path /abs/file.md", file=sys.stderr)
+            return 1
+        if not Path(args.path).is_file():
+            print(f"No such file: {args.path}", file=sys.stderr)
+            return 1
+        from localvocal.markdown_extractor import EXTRACT_MODEL
+        return run_recall(args.path, args.model, args.voice, args.asr_model,
+                          args.extract_model or EXTRACT_MODEL, args.debug)
 
     decks = args.decks or sorted(glob.glob("data/*.xml"))
     if not decks:
