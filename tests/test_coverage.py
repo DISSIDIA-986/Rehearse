@@ -60,6 +60,34 @@ def test_no_anchor_bullet_scores_on_semantics_only():
     assert cov.bullets[0].status == "hit"
 
 
+def test_numeric_anchor_is_whole_token_not_substring():
+    # "17" must NOT be credited by "2017" (final-review HIGH fix)
+    it = PracticeItem(id="q", prompt="p", expected_points=["Shipped 17 models"])
+    tr = CoverageTracker([it], embed=_kw_embed("models"), threshold=0.55)
+    assert tr.score(it, "I shipped models in 2017").bullets[0].status == "partial"
+    tr2 = CoverageTracker([it], embed=_kw_embed("models"), threshold=0.55)
+    assert tr2.score(it, "I shipped 17 models").bullets[0].status == "hit"
+
+
+def test_anchorless_prose_needs_lexical_overlap():
+    # vague on-topic talk must NOT fully cover a prose bullet on cosine alone
+    it = PracticeItem(id="q", prompt="p", expected_points=["focus on real communication"])
+    tr = CoverageTracker([it], embed=_kw_embed("communication"), threshold=0.55)
+    assert tr.score(it, "communication matters").bullets[0].status == "partial"
+    tr2 = CoverageTracker([it], embed=_kw_embed("communication"), threshold=0.55)
+    assert tr2.score(it, "I focus on real communication").bullets[0].status == "hit"
+
+
+def test_coverage_is_sticky_and_cumulative_is_capped():
+    from localvocal.coverage import MAX_CUM_CHARS
+    it = PracticeItem(id="q", prompt="p", expected_points=["NPV"])
+    tr = CoverageTracker([it], embed=lambda ts: [[1.0, 0.0] for _ in ts], threshold=0.0)
+    assert tr.score(it, "NPV").bullets[0].status == "hit"
+    cov = tr.score(it, "x" * (MAX_CUM_CHARS + 1000))  # truncates the anchor out
+    assert len(cov.cumulative_answer) <= MAX_CUM_CHARS
+    assert cov.bullets[0].status == "hit"  # sticky: a recalled point stays recalled
+
+
 def test_summary_counts():
     it = _item()
     tr = CoverageTracker([it], embed=_kw_embed("pricing"), threshold=0.55)

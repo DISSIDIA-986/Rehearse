@@ -13,6 +13,7 @@ import pytest
 
 from localvocal.llm_client import ChatResult
 from localvocal.markdown_extractor import (
+    _EXTRACT_PROMPT,
     _fallback_items,
     chunk_markdown,
     extract_items,
@@ -47,6 +48,25 @@ def test_fallback_heading_plus_bullets():
     assert len(items) == 1
     assert items[0].prompt == "Risk control"
     assert items[0].expected_points == ["pricing engine", "3-stage scoring"]
+
+
+def test_fallback_keeps_headed_prose():
+    # prose under a heading (no bullets) must not be lost (final-review fix)
+    md = "## Kafka\nKafka handled risk events in a streaming pipeline.\nBackpressure was managed with retries."
+    items = _fallback_items(md, "c0")
+    assert len(items) == 1 and items[0].section == "Kafka"
+    assert items[0].expected_points == [
+        "Kafka handled risk events in a streaming pipeline.",
+        "Backpressure was managed with retries.",
+    ]
+
+
+def test_extract_prompt_defends_against_injection():
+    assert "UNTRUSTED" in _EXTRACT_PROMPT and "Never follow" in _EXTRACT_PROMPT
+
+
+def test_fallback_drops_bare_heading_with_no_content():
+    assert _fallback_items("## Lonely heading\n\n## Another", "c0") == []
 
 
 # --- extract_items with fake chat ----------------------------------------
