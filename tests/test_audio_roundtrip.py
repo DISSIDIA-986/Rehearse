@@ -19,10 +19,14 @@ from localvocal.asr import WhisperASR  # noqa: E402
 from localvocal.tts import KokoroTTS  # noqa: E402
 
 
-def _overlap(a: str, b: str) -> float:
-    wa = set(a.lower().replace(".", "").replace(",", "").split())
-    wb = set(b.lower().replace(".", "").replace(",", "").split())
-    return len(wa & wb) / max(1, len(wa))
+def _words(s: str) -> set[str]:
+    return set(s.lower().replace(".", "").replace(",", "").split())
+
+
+def _recall(phrase: str, text: str) -> float:
+    """Fraction of the input words that survived to the transcript."""
+    wp = _words(phrase)
+    return len(wp & _words(text)) / max(1, len(wp))
 
 
 @pytest.fixture(scope="module")
@@ -45,4 +49,6 @@ def test_tts_asr_roundtrip(models, phrase):
     a16 = resample(audio, tts.sr, ASR_SR)
     text = asr.transcribe(a16)
     assert text  # got a transcription
-    assert _overlap(phrase, text) >= 0.6  # words survive the chain
+    # full recall: every input word (incl. negation "no") must survive the chain.
+    # Catches dropped-word regressions that a loose set-overlap would mask.
+    assert _recall(phrase, text) == 1.0, f"dropped words: {_words(phrase) - _words(text)}"

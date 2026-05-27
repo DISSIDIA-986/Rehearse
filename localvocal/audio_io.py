@@ -19,26 +19,51 @@ TTS_SR = 24_000
 DEFAULT_DEVICE_SR = 48_000
 
 
+def _scrub(a: np.ndarray) -> np.ndarray:
+    """float32 + replace NaN/Inf with 0 so one bad buffer can't poison the pipeline."""
+    a = np.asarray(a, dtype=np.float32)
+    if not np.isfinite(a).all():
+        a = np.nan_to_num(a, nan=0.0, posinf=0.0, neginf=0.0)
+    return a
+
+
 def to_mono(audio: np.ndarray) -> np.ndarray:
-    """Collapse (n, channels) or (channels, n) to mono float32."""
-    a = np.asarray(audio, dtype=np.float32)
+    """Collapse to mono float32.
+
+    Expects sounddevice's layout: 1-D mono, or 2-D (frames, channels). We do NOT
+    guess the channel axis — sounddevice always returns (frames, channels), so we
+    average the LAST axis. (channels, frames) input would be wrong; callers must
+    pass the sounddevice shape.
+    """
+    a = _scrub(audio)
     if a.ndim == 1:
         return a
-    # assume the smaller axis is channels
-    ch_axis = 0 if a.shape[0] < a.shape[1] else 1
-    return a.mean(axis=ch_axis).astype(np.float32)
+    if a.ndim == 2:
+        return a.mean(axis=1).astype(np.float32)
+    raise ValueError(f"to_mono expects 1-D or 2-D audio, got shape {a.shape}")
 
 
 def resample(audio: np.ndarray, sr_in: int, sr_out: int) -> np.ndarray:
-    """Resample mono float32 audio. soxr if installed, else linear interp."""
-    a = np.asarray(audio, dtype=np.float32)
+    """Resample mono float32 audio.
+
+    Uses soxr (anti-aliased, the declared `audio` dep). Without soxr we fall back
+    to linear interpolation ONLY for upsampling (no aliasing risk); downsampling
+    without soxr raises instead of silently aliasing high frequencies into the
+    speech band (which would degrade ASR while looking like a model problem).
+    """
+    a = _scrub(audio)
     if sr_in == sr_out or a.size == 0:
         return a
     try:
         import soxr
 
         return np.asarray(soxr.resample(a, sr_in, sr_out), dtype=np.float32)
-    except ImportError:
+    except ImportError as e:
+        if sr_out < sr_in:
+            raise RuntimeError(
+                f"downsampling {sr_in}->{sr_out} needs soxr (anti-aliasing); "
+                "install the audio extra (uv sync --extra audio)"
+            ) from e
         n_out = int(round(a.shape[0] * sr_out / sr_in))
         if n_out <= 0:
             return np.zeros(0, dtype=np.float32)

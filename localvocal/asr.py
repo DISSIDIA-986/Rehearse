@@ -12,6 +12,7 @@ import numpy as np
 from localvocal.audio_io import ASR_SR
 
 DEFAULT_MODEL = "small.en"
+MIN_SAMPLES = int(0.1 * ASR_SR)  # <100ms: too short, whisper would hallucinate
 
 
 class WhisperASR:
@@ -28,7 +29,7 @@ class WhisperASR:
     def transcribe(self, audio_16k_mono: np.ndarray, language: str = "en") -> str:
         """Transcribe 16 kHz mono float32 audio to text."""
         audio = np.asarray(audio_16k_mono, dtype=np.float32).reshape(-1)
-        if audio.size == 0:
+        if audio.size < MIN_SAMPLES:  # empty or too-short clip -> skip (no hallucination)
             return ""
         segments, _info = self._model.transcribe(
             audio, language=language, beam_size=1
