@@ -115,7 +115,7 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
     if not sentences:
         print("No sentences loaded — check --decks paths.", file=sys.stderr)
         return 1
-    print(f"Loaded {len(sentences)} sentences. Warming up {model}...")
+    print(f"Loaded {len(sentences)} sentences. Warming up {model} + ASR/TTS...")
     try:
         warmup(model=model)
         think_probe(model=model)
@@ -123,6 +123,13 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
         if voice:
             tts = KokoroTTS(voice=voice)
         vad = SileroVad()
+        # Warm ASR/TTS/VAD too: the FIRST transcribe and the FIRST Kokoro synth
+        # (which builds the pipeline) are slow. Pay it now, not on the user's
+        # first turn (live test showed an 8s cold turn -> ~2s warm).
+        _warm = audio_io.resample(tts.synth("Let's practice English."),
+                                  tts.sr, audio_io.ASR_SR)
+        asr.transcribe(_warm)
+        vad.prob(np.zeros(SileroVad.FRAME, dtype=np.float32)); vad.reset()
     except Exception as e:
         print(f"Startup failed: {e}", file=sys.stderr)
         return 1
