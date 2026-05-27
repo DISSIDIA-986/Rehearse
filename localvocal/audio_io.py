@@ -72,6 +72,32 @@ def resample(audio: np.ndarray, sr_in: int, sr_out: int) -> np.ndarray:
         return np.interp(x_new, x_old, a).astype(np.float32)
 
 
+class RingBuffer:
+    """Fixed-duration rolling buffer of recent mono samples (pre-roll).
+
+    The capture loop pushes every frame here while IDLE; when VAD fires "start",
+    the caller prepends get() so the first ~200ms of speech (spoken before the
+    voiced threshold tripped) is not clipped. Solves the Codex pre-roll gap.
+    """
+
+    def __init__(self, max_samples: int):
+        self.max_samples = max(0, int(max_samples))
+        self._arr = np.zeros(0, dtype=np.float32)
+
+    def push(self, frame: np.ndarray) -> None:
+        if self.max_samples == 0:
+            return
+        f = np.asarray(frame, dtype=np.float32).reshape(-1)
+        if f.size:
+            self._arr = np.concatenate([self._arr, f])[-self.max_samples:]
+
+    def get(self) -> np.ndarray:
+        return self._arr.copy()
+
+    def clear(self) -> None:
+        self._arr = np.zeros(0, dtype=np.float32)
+
+
 def list_devices():  # pragma: no cover - hardware dependent
     """Return sounddevice's device table (for the manual mic test / smoke)."""
     import sounddevice as sd
