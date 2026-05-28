@@ -15,10 +15,37 @@ from rehearse.llm_client import ChatResult
 from rehearse.markdown_extractor import (
     _EXTRACT_PROMPT,
     _fallback_items,
+    _parse_json_obj,
     chunk_markdown,
     extract_items,
     load_markdown,
 )
+
+
+def test_parse_json_obj_handles_fences_and_prose():
+    # Ollama's schema `format` isn't always enforced; tolerate fences / stray prose
+    assert _parse_json_obj('```json\n{"items": []}\n```') == {"items": []}
+    assert _parse_json_obj('Sure, here: {"items": [{"prompt": "p"}]} done') == {
+        "items": [{"prompt": "p"}]}
+    assert _parse_json_obj('{"items": []}') == {"items": []}
+
+
+def test_extract_items_recovers_fenced_json_not_fallback():
+    def fenced(messages, **kw):
+        return ChatResult(
+            text='```json\n{"items":[{"prompt":"Q","expected_points":["a real fact"]}]}\n```',
+            ttft_s=0.1, total_s=0.2, had_think_block=False)
+    items = extract_items("## H\n- x", chat_fn=fenced)
+    assert len(items) == 1 and items[0].prompt == "Q"  # parsed, not regex-fallback
+
+
+def test_extract_items_reports_progress():
+    def fake(m, **kw):
+        return ChatResult(text='{"items":[{"prompt":"P","expected_points":["fact"]}]}',
+                          ttft_s=0.1, total_s=0.2, had_think_block=False)
+    seen = []
+    extract_items("## A\n- x\n## B\n- y", chat_fn=fake, on_progress=lambda d, t: seen.append((d, t)))
+    assert seen and seen[-1][0] == seen[-1][1]  # final progress call reports done == total
 
 
 # --- chunking -------------------------------------------------------------
@@ -38,7 +65,15 @@ def test_chunk_heading_aware():
     text = "intro\n" + "## A\n" + "a " * 50 + "\n## B\n" + "b " * 50
     chunks = chunk_markdown(text, max_chars=200)
     assert len(chunks) >= 2
-    assert any(c.startswith("## A") for c in chunks)
+    assert any("## A" in c for c in chunks) and any("## B" in c for c in chunks)
+
+
+def test_chunk_packs_many_small_sections():
+    # 10 tiny `##` sections must NOT become 10 chunks (that was the 23-call slowdown)
+    text = "\n".join(f"## S{i}\n- point {i}" for i in range(10))
+    chunks = chunk_markdown(text, max_chars=200)
+    assert len(chunks) < 10  # sections are packed together up to max_chars
+    assert "".join(chunks).count("## S") == 10  # nothing dropped
 
 
 # --- fallback parser ------------------------------------------------------

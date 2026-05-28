@@ -23,10 +23,20 @@ from rehearse.coverage import has_substance
 from rehearse.llm_client import chat
 from rehearse.practice_item import PracticeItem
 
-EXTRACT_MODEL = "qwen3.5:9b"  # one-time, accuracy > speed; --extract-model overrides
-EXTRACTOR_VERSION = 3  # bump when prompt/schema/parse logic changes -> invalidates cache
+# Default to the fast 4b: extraction is one LLM call PER CHUNK and a big doc is
+# many chunks, so 9b's ~90s/chunk made a 30KB doc take 30+ min (dogfooded). 4b is
+# already warm (same as the coach model) and accurate enough for recall items.
+# Pass --extract-model qwen3.5:9b for higher quality if you can wait.
+EXTRACT_MODEL = "qwen3.5:4b"
+EXTRACTOR_VERSION = 6  # bump when prompt/schema/parse logic changes -> invalidates cache
+# Generous cap: num_predict is a ceiling, not a target — the model stops when the
+# JSON is done. Make it big enough that a dense chunk's items never truncate mid-
+# JSON (truncated JSON fails to parse -> silent regex fallback with meta noise).
+EXTRACT_NUM_PREDICT = 4096
 _CACHE_DIR = Path.home() / ".cache" / "rehearse" / "recall"
-MAX_CHUNK_CHARS = 4000
+# Pack small heading-sections up to this. Bigger chunks = fewer LLM calls = less
+# repeated per-call overhead; total generated tokens are ~constant either way.
+MAX_CHUNK_CHARS = 6000
 CHUNK_OVERLAP = 200
 
 # Ollama structured-output schema: a small schema is far more reliable (C4).
@@ -92,18 +102,32 @@ def chunk_markdown(text: str, max_chars: int = MAX_CHUNK_CHARS,
     else:
         parts = [text]
 
+    # PACK consecutive heading-sections up to max_chars instead of one chunk per
+    # heading — a heading-dense doc (e.g. 23 small `##` sections) otherwise becomes
+    # 23 separate LLM calls. Oversized sections are size-windowed.
     out: list[str] = []
+    buf = ""
+    step = max(1, max_chars - overlap)
     for p in (p.strip() for p in parts):
         if not p:
             continue
-        if len(p) <= max_chars:
-            out.append(p)
-            continue
-        start = 0
-        step = max(1, max_chars - overlap)
-        while start < len(p):
-            out.append(p[start:start + max_chars])
-            start += step
+        if len(p) > max_chars:
+            if buf:
+                out.append(buf)
+                buf = ""
+            start = 0
+            while start < len(p):
+                out.append(p[start:start + max_chars])
+                start += step
+        elif not buf:
+            buf = p
+        elif len(buf) + 2 + len(p) <= max_chars:
+            buf += "\n\n" + p
+        else:
+            out.append(buf)
+            buf = p
+    if buf:
+        out.append(buf)
     return out
 
 
@@ -138,17 +162,22 @@ def _fallback_items(chunk: str, prefix: str) -> list[PracticeItem]:
     return items
 
 
-def extract_items(md_text: str, *, model: str = EXTRACT_MODEL, chat_fn=chat) -> list[PracticeItem]:
-    """Per chunk: LLM(format=json) -> PracticeItems; fall back to heading+bullets on failure."""
+def extract_items(md_text: str, *, model: str = EXTRACT_MODEL, chat_fn=chat,
+                  on_progress=None) -> list[PracticeItem]:
+    """Per chunk: LLM(format=json) -> PracticeItems; fall back to heading+bullets on
+    failure. on_progress(done, total) is called after each chunk (a big doc is many
+    one-shot LLM calls, so the caller can show progress instead of looking hung)."""
     items: list[PracticeItem] = []
-    for ci, chunk in enumerate(chunk_markdown(md_text)):
+    chunks = chunk_markdown(md_text)
+    total = len(chunks)
+    for ci, chunk in enumerate(chunks):
         try:
             r = chat_fn(
                 # .replace (not .format) — the prompt contains literal {"items":[...]} braces
                 [{"role": "user", "content": _EXTRACT_PROMPT.replace("{chunk}", chunk)}],
-                model=model, num_predict=2048, temperature=0.0, fmt=_ITEM_SCHEMA,
+                model=model, num_predict=EXTRACT_NUM_PREDICT, temperature=0.0, fmt=_ITEM_SCHEMA,
             )
-            data = json.loads(r.text)
+            data = _parse_json_obj(r.text)
             chunk_items: list[PracticeItem] = []
             for j, raw in enumerate(data.get("items") or []):
                 prompt = str(raw.get("prompt") or "").strip()
@@ -164,6 +193,8 @@ def extract_items(md_text: str, *, model: str = EXTRACT_MODEL, chat_fn=chat) -> 
             items.extend(chunk_items or _fallback_items(chunk, f"c{ci}"))
         except Exception:
             items.extend(_fallback_items(chunk, f"c{ci}"))
+        if on_progress:
+            on_progress(ci + 1, total)
     # Keep only substantive points (a content-free 'point' has nothing to recall),
     # drop items left empty, and dedupe by key — overlap windows on a huge section
     # can yield the same item twice (C5 merge).
@@ -176,6 +207,25 @@ def extract_items(md_text: str, *, model: str = EXTRACT_MODEL, chat_fn=chat) -> 
             it.expected_points = pts
             merged.append(it)
     return merged
+
+
+_FENCE_OPEN = re.compile(r"^```[a-zA-Z]*\n?")
+_FENCE_CLOSE = re.compile(r"\n?```$")
+
+
+def _parse_json_obj(text: str) -> dict:
+    """Parse the model's JSON even when it wraps it in a ```json fence or adds
+    prose — Ollama's schema `format` is not always enforced (observed qwen3.5:9b
+    emitting fenced JSON), so a raw json.loads silently failed and every chunk fell
+    back to regex. Strip fences, else grab the outermost {...}."""
+    t = _FENCE_CLOSE.sub("", _FENCE_OPEN.sub("", text.strip())).strip()
+    try:
+        return json.loads(t)
+    except Exception:
+        i, j = t.find("{"), t.rfind("}")
+        if i != -1 and j > i:
+            return json.loads(t[i:j + 1])
+        raise
 
 
 def _hash(text: str) -> str:
@@ -197,7 +247,8 @@ def _write_agenda(path: Path, items: list[PracticeItem]) -> None:
 
 
 def load_markdown(path, *, model: str = EXTRACT_MODEL, chat_fn=chat,
-                  cache_dir=_CACHE_DIR, write_agenda: bool = True) -> list[PracticeItem]:
+                  cache_dir=_CACHE_DIR, write_agenda: bool = True,
+                  on_progress=None) -> list[PracticeItem]:
     """Load + extract recall items. Cached by (extractor version, model, content)
     so a model/prompt/schema change re-extracts instead of replaying stale items.
     Writes a visible agenda on BOTH cache hit and miss (C9)."""
@@ -209,7 +260,7 @@ def load_markdown(path, *, model: str = EXTRACT_MODEL, chat_fn=chat,
     if cache.exists():
         items = [PracticeItem(**d) for d in json.loads(cache.read_text(encoding="utf-8"))]
     else:
-        items = extract_items(text, model=model, chat_fn=chat_fn)
+        items = extract_items(text, model=model, chat_fn=chat_fn, on_progress=on_progress)
         if items:  # never cache an empty result from a transient LLM/JSON failure
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps([asdict(it) for it in items], ensure_ascii=False),

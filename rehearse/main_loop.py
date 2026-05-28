@@ -490,9 +490,21 @@ def run_recall(path: str, model: str, voice: str, asr_model: str,
         return 1
     asr, tts, embed = started
 
-    print(f"Extracting recall items from {path} (one-time, {extract_model})...")
+    if extract_model != model:  # coach model is already warm; warm a different extractor
+        try:
+            warmup(model=extract_model)
+        except Exception:
+            pass
+    print(f"Extracting recall items from {path} (model {extract_model}).")
+    print("  This is ONE-TIME and cached — a long doc is one LLM call per chunk, so it")
+    print("  can take a few minutes the first time. Progress below (Ctrl-C to abort):")
+
+    def _progress(done, total):
+        end = "\n" if done == total else "\r"
+        print(f"  extracting chunk {done}/{total}...", end=end, flush=True)
+
     try:
-        items = load_markdown(path, model=extract_model)
+        items = load_markdown(path, model=extract_model, on_progress=_progress)
     except Exception as e:
         print(f"Could not read/extract {path}: {e}", file=sys.stderr)
         return 1
