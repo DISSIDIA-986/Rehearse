@@ -89,6 +89,11 @@ Defaults: half-duplex (mute mic while the assistant speaks — works on the Mac
 speaker without echo), continuous until you say "stop" or hit Ctrl-C, press Enter
 to cut off a reply. On exit it prints latency p50/p95 and your practiced count.
 
+The LLM backend auto-picks **MLX** (Apple-GPU, faster) if `mlx-lm` is present, else
+Ollama. Override per role with `--coach-backend {auto,mlx,ollama}` (live coach) or
+`--extract-backend {auto,mlx,ollama}` (one-time markdown extraction). Ollama is still
+required either way for embeddings and as the fallback backend.
+
 ### Markdown-recall mode / 凭记忆复述任意 Markdown
 
 Point it at ANY markdown file (resume, interview prep, a terminology glossary, a

@@ -750,7 +750,8 @@ def main(argv: list[str] | None = None) -> int:
         # --menu is a standalone launcher; reject combos rather than silently
         # ignoring a mode flag the user clearly meant (no silent drift).
         if (args.smoke or args.manual_turns or args.brief or args.full_duplex
-                or args.content != "english" or args.path or args.decks):
+                or args.content != "english" or args.path or args.decks
+                or args.coach_backend != "auto" or args.extract_backend != "auto"):
             print("--menu is a standalone launcher — don't combine it with other "
                   "mode flags (pick the mode inside the menu).", file=sys.stderr)
             return 2
@@ -773,7 +774,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.smoke:
-        return smoke(decks, args.model or DEFAULT_MODEL)
+        # smoke is the Ollama-health check (Ollama is still required for fallback +
+        # embeddings); always probe the Ollama default model, regardless of --model
+        # which is the LOOP coach override and may name an MLX HF id.
+        return smoke(decks, DEFAULT_MODEL)
     if args.manual_turns:
         return run_manual(decks, args.coach_backend, args.model, args.voice, args.n_targets,
                           args.asr_model, args.debug, args.brief)
