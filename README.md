@@ -3,7 +3,7 @@
 > 本地、离线、免费、开源的语音练习教练 —— 练英语口语对话，也能凭记忆复述任意 Markdown 笔记。在 Apple Silicon Mac 上跑。
 > A fully-local, offline, free, open-source voice coach for Apple Silicon Macs: practice English conversation, and recall any Markdown doc from memory — out loud.
 
-**Status:** 🟢 v1 + markdown-recall mode shipped (156 tests pass, `--smoke` green). Approved architecture below.
+**Status:** 🟢 v1 + markdown-recall mode shipped (159 tests pass, `--smoke` green). Approved architecture below.
 
 ## 这是什么 / What it is
 
@@ -31,7 +31,7 @@ Fork & adapt [`eauchs/speech-to-speech-pipeline`](https://github.com/eauchs/spee
 | Stage | Choice | Device | Why |
 |---|---|---|---|
 | ASR | faster-whisper `small.en` | **CPU** (int8) | English-only, keeps GPU free |
-| LLM | Ollama `qwen3.5:4b` (warm, non-thinking) | **GPU** | 4B 比 9B 首字更快；latency-first（实测为准） |
+| LLM | **MLX** `Qwen3.5-4B-MLX-4bit`（非思考,Ollama 回退；embeddings 仍走 Ollama） | **GPU** | 实测整句回复约一半时间,每轮首音省 ~0.7s |
 | TTS | Kokoro-82M via mlx-audio | **GPU**（与 LLM 串行） | RTF ≈ 0.03, natural enough, Apache-2.0 |
 | VAD | Silero VAD | CPU | sub-second endpointing |
 | Glue | asyncio + sentence-chunked streaming TTS + half-duplex | — | lowest perceived latency |
@@ -117,7 +117,7 @@ The coach never sees the expected answers, so it can't leak them; it offers a
 hint only after you stall, then moves on so you're never stuck. It prints a
 coverage summary at the end.
 
-**Status:** v1 + markdown-recall mode implemented, 156 tests pass, `--smoke` green.
+**Status:** v1 + markdown-recall mode implemented, 159 tests pass, `--smoke` green.
 The live mic loop is the one path validated manually (the dev environment had no
 mic; the full ASR→LLM→TTS chain is covered by automated TTS→ASR round-trip +
 full-turn tests).

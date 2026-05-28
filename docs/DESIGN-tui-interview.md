@@ -255,9 +255,11 @@ Locked engineering calls (per "investigate + keep it simple"):
   throughput is ~2.8x (275 vs 96 chars/s) once thinking is off. (History: specced 9b-default → too
   slow at ~90s/chunk → 4b → MLX-4b.) Key per-backend: Ollama uses `think:false`+`format`; MLX uses
   the chat template's `enable_thinking=False` (no schema mode, so the tolerant parser handles ```fences
-  / prose). The LIVE LOOP stays on Ollama — measured MLX TTFT 0.37s ≈ Ollama 0.33s, no latency win,
-  and embeddings stay on Ollama (vector space = scoring contract). Chunk by `##`/`#` AND pack small
-  sections; extract per chunk; merge. Backend is chosen ONCE per doc and is part of the cache key.
+  / prose). The LIVE LOOP also runs on MLX by default with Ollama fallback (`--coach-backend`):
+  rigorous TTFS probe showed MLX shaves ~0.7s/turn off first-audio in the current batched pipeline
+  (total 0.82 vs 1.52s); TTFT is equal but post-first-token rate is ~2.8x. Embeddings stay on
+  Ollama (vector space = scoring contract). Chunk by `##`/`#` AND pack small sections; extract
+  per chunk; merge. Backend is chosen ONCE per doc and is part of the cache key.
 - **Persona:** extractor also classifies `content_type` (interview / terminology / speech /
   generic); `--persona` overrides. Coach prompt adapts. Plain-speech + warmth rules from
   `prompt_builder` are kept.

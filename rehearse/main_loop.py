@@ -42,18 +42,35 @@ def _load_models(asr_model: str = "small.en", voice: str = ""):
     return WhisperASR(model_size=asr_model), tts
 
 
-def _startup(decks: list[str], model: str, voice: str, asr_model: str):
-    """Shared startup for both turn modes: load decks, warm LLM/ASR/TTS, probe
-    embeddings. Returns (sentences, asr, tts, practiced_on) or None on failure."""
+def _warm_coach(coach_backend: str, model: str | None):
+    """Resolve the coach backend ONCE and eagerly preload + warm-probe its model
+    (Ollama: warmup() + think_probe(); MLX: mlx_warm_and_probe() — both enforce a
+    non-thinking + warm-TTFT contract). Returns (chat_fn, model_id, backend_name).
+    Raises on probe failure so the loop never starts on a half-working coach."""
+    from rehearse.mlx_llm import mlx_warm_and_probe, resolve_coach_chat
+    chat_fn, mid, backend = resolve_coach_chat(coach_backend, model)
+    print(f"Warming up coach: {backend} ({mid}) (first run / cold model can take 30-60s)...")
+    if backend == "mlx":
+        ttft = mlx_warm_and_probe(mid)
+    else:
+        warmup(model=mid)
+        ttft = think_probe(model=mid).ttft_s or 0.0
+    print(f"  coach warm: ttft={ttft:.2f}s")
+    return chat_fn, mid, backend
+
+
+def _startup(decks: list[str], coach_backend: str, model: str | None,
+             voice: str, asr_model: str):
+    """Shared startup for both English modes: load decks, resolve+warm the coach
+    backend, warm ASR/TTS, probe embeddings. Returns
+    (sentences, asr, tts, practiced_on, chat_fn, model_id, backend_name) or None."""
     sentences = load_sentences(decks)
     if not sentences:
         print("No sentences loaded — check --decks paths.", file=sys.stderr)
         return None
-    print(f"Loaded {len(sentences)} sentences. Warming up {model} + ASR/TTS "
-          f"(first run / cold model can take 30-60s)...")
+    print(f"Loaded {len(sentences)} sentences.")
     try:
-        warmup(model=model)
-        think_probe(model=model)
+        chat_fn, mid, backend = _warm_coach(coach_backend, model)
         asr, tts = _load_models(asr_model, voice)
         # Warm ASR + TTS first-call (whisper init + Kokoro pipeline build) so the
         # user's FIRST turn isn't an 8s cold path.
@@ -70,7 +87,7 @@ def _startup(decks: list[str], model: str, voice: str, asr_model: str):
     except Exception as e:
         practiced_on = False
         print(f"  (nomic-embed unreachable: {e} — practiced tracking off)")
-    return sentences, asr, tts, practiced_on
+    return sentences, asr, tts, practiced_on, chat_fn, mid, backend
 
 
 def _save_debug(debug_dir, utterance16k, user_text, reply_text, info):
@@ -130,10 +147,13 @@ def smoke(decks: list[str], model: str) -> int:
 
     try:
         from rehearse.markdown_extractor import resolve_extract_chat
-        _, eid, backend = resolve_extract_chat("auto")
-        print(f"[ok] markdown-extract backend: {backend} ({eid})")
+        from rehearse.mlx_llm import resolve_coach_chat
+        _, eid, eback = resolve_extract_chat("auto")
+        _, cid, cback = resolve_coach_chat("auto")
+        print(f"[ok] coach backend: {cback} ({cid})")
+        print(f"[ok] markdown-extract backend: {eback} ({eid})")
     except Exception as e:
-        print(f"[WARN] extract backend probe: {e}")
+        print(f"[WARN] backend probe: {e}")
 
     try:
         SileroVad()
@@ -154,7 +174,7 @@ def smoke(decks: list[str], model: str) -> int:
     return 0 if ok else 1
 
 
-def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
+def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str, n_targets: int,
              full_duplex: bool, end_silence_ms: int, asr_model: str,
              debug: bool, brief: bool) -> int:  # pragma: no cover - needs a microphone
     import queue
@@ -167,10 +187,10 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
         return 1
     from rehearse.practiced_scorer import ollama_embed
 
-    started = _startup(decks, model, voice, asr_model)
+    started = _startup(decks, coach_backend, model, voice, asr_model)
     if started is None:
         return 1
-    sentences, asr, tts, practiced_on = started
+    sentences, asr, tts, practiced_on, coach_chat, _mid, _backend = started
     try:
         vad = SileroVad()
         vad.prob(np.zeros(SileroVad.FRAME, dtype=np.float32)); vad.reset()  # warm
@@ -294,6 +314,7 @@ def run_loop(decks: list[str], model: str, voice: str, n_targets: int,
                 t_end = time.monotonic()
                 targets = select_targets(sentences, stats, n=n_targets)
                 r = respond(utterance, history, targets, asr=asr, tts=tts,
+                            chat_fn=coach_chat,
                             embed=ollama_embed if practiced_on else None,
                             system_prompt=build_system_prompt(targets, brief=brief))
                 if not r.user_text:
@@ -343,7 +364,7 @@ def _key(sentences, target_text):
     return target_text.lower()
 
 
-def run_manual(decks: list[str], model: str, voice: str, n_targets: int,
+def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: str, n_targets: int,
                asr_model: str, debug: bool, brief: bool) -> int:  # pragma: no cover - needs a microphone
     """Manual turns: you press Enter to start, speak as long as you want (pause to
     think freely — no VAD time pressure), press Enter to send. Best for a thinking
@@ -357,10 +378,10 @@ def run_manual(decks: list[str], model: str, voice: str, n_targets: int,
         return 1
     from rehearse.practiced_scorer import ollama_embed
 
-    started = _startup(decks, model, voice, asr_model)
+    started = _startup(decks, coach_backend, model, voice, asr_model)
     if started is None:
         return 1
-    sentences, asr, tts, practiced_on = started
+    sentences, asr, tts, practiced_on, coach_chat, _mid, _backend = started
     try:
         in_sr = int(sd.query_devices(kind="input")["default_samplerate"])
         out_sr = int(sd.query_devices(kind="output")["default_samplerate"])
@@ -410,6 +431,7 @@ def run_manual(decks: list[str], model: str, voice: str, n_targets: int,
                 utterance = audio_io.resample(np.concatenate(blocks), in_sr, audio_io.ASR_SR)
                 targets = select_targets(sentences, stats, n=n_targets)
                 r = respond(utterance, history, targets, asr=asr, tts=tts,
+                            chat_fn=coach_chat,
                             embed=ollama_embed if practiced_on else None,
                             system_prompt=build_system_prompt(targets, brief=brief))
                 if r.practiced_error:
@@ -451,13 +473,12 @@ def run_manual(decks: list[str], model: str, voice: str, n_targets: int,
 RECALL_NUM_PREDICT = 120  # coach replies stay short (their turn to talk, not the AI's)
 
 
-def _startup_recall(model: str, voice: str, asr_model: str):
-    """Startup for markdown-recall mode: warm LLM/ASR/TTS + require embeddings
-    (coverage scoring is the whole point here). Returns (asr, tts, embed) or None."""
-    print(f"Warming up {model} + ASR/TTS (first run / cold model can take 30-60s)...")
+def _startup_recall(coach_backend: str, model: str | None, voice: str, asr_model: str):
+    """Startup for markdown-recall mode: resolve+warm the coach backend, warm ASR/TTS,
+    require embeddings (coverage scoring is the whole point here).
+    Returns (asr, tts, embed, chat_fn, model_id, backend_name) or None."""
     try:
-        warmup(model=model)
-        think_probe(model=model)
+        chat_fn, mid, backend = _warm_coach(coach_backend, model)
         asr, tts = _load_models(asr_model, voice)
         _warm = audio_io.resample(tts.synth("Let's begin."), tts.sr, audio_io.ASR_SR)
         asr.transcribe(_warm)
@@ -471,16 +492,16 @@ def _startup_recall(model: str, voice: str, asr_model: str):
         print(f"nomic-embed unreachable: {e}. Recall scoring needs it — "
               f"start Ollama / `ollama pull nomic-embed-text`.", file=sys.stderr)
         return None
-    return asr, tts, ollama_embed
+    return asr, tts, ollama_embed, chat_fn, mid, backend
 
 
-def run_recall(path: str, model: str, voice: str, asr_model: str,
+def run_recall(path: str, coach_backend: str, model: str | None,
+               voice: str, asr_model: str,
                extract_backend: str, extract_model: str | None,
                debug: bool) -> int:  # pragma: no cover - needs a microphone
     """Markdown-recall mode: walk an agenda extracted from a doc, interviewing the
     user to recall each item FROM MEMORY (manual turns — recall needs thinking time,
     no VAD pressure). Separate from the English path; shares only speak_turn()."""
-    import functools
     import queue
 
     try:
@@ -493,10 +514,10 @@ def run_recall(path: str, model: str, voice: str, asr_model: str,
     from rehearse.pipeline import speak_turn
     from rehearse.recall_session import RecallSession
 
-    started = _startup_recall(model, voice, asr_model)
+    started = _startup_recall(coach_backend, model, voice, asr_model)
     if started is None:
         return 1
-    asr, tts, embed = started
+    asr, tts, embed, coach_chat, _mid, _backend = started
 
     # Resolve the backend up front just to report it (mlx ~2.6x on Apple Silicon, else
     # Ollama). load_markdown re-resolves internally so the cache key matches; the model
@@ -529,7 +550,8 @@ def run_recall(path: str, model: str, voice: str, asr_model: str,
 
     session = RecallSession(items, tracker=CoverageTracker(items, embed=embed),
                             source_title=items[0].source_title or Path(path).stem)
-    coach_chat = functools.partial(chat, model=model)
+    # coach_chat was already resolved + warmed in _startup_recall (the live coach must
+    # be ready before the first turn — extraction may be lazy, the coach cannot).
 
     try:
         in_sr = int(sd.query_devices(kind="input")["default_samplerate"])
@@ -698,7 +720,12 @@ def main(argv: list[str] | None = None) -> int:
                          "(mlx default: mlx-community/Qwen3.5-4B-MLX-4bit; ollama default: qwen3.5:4b)")
     ap.add_argument("--decks", nargs="*", default=None,
                     help="AnkiApp XML deck files (default: data/*.xml)")
-    ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--coach-backend", choices=["auto", "mlx", "ollama"], default="auto",
+                    help="LLM backend for the LIVE coach: auto (mlx if available, saves "
+                         "~0.7s/turn first-audio, else ollama)")
+    ap.add_argument("--model", default=None,
+                    help="override the coach model id for the chosen backend "
+                         "(mlx default: mlx-community/Qwen3.5-4B-MLX-4bit; ollama default: qwen3.5:4b)")
     ap.add_argument("--voice", default="")
     ap.add_argument("--n-targets", type=int, default=3)
     ap.add_argument("--full-duplex", action="store_true",
@@ -736,7 +763,8 @@ def main(argv: list[str] | None = None) -> int:
         if not Path(args.path).is_file():
             print(f"No such file: {args.path}", file=sys.stderr)
             return 1
-        return run_recall(args.path, args.model, args.voice, args.asr_model,
+        return run_recall(args.path, args.coach_backend, args.model,
+                          args.voice, args.asr_model,
                           args.extract_backend, args.extract_model, args.debug)
 
     decks = args.decks or sorted(glob.glob("data/*.xml"))
@@ -745,12 +773,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.smoke:
-        return smoke(decks, args.model)
+        return smoke(decks, args.model or DEFAULT_MODEL)
     if args.manual_turns:
-        return run_manual(decks, args.model, args.voice, args.n_targets,
+        return run_manual(decks, args.coach_backend, args.model, args.voice, args.n_targets,
                           args.asr_model, args.debug, args.brief)
-    return run_loop(decks, args.model, args.voice, args.n_targets, args.full_duplex,
-                    args.end_silence_ms, args.asr_model, args.debug, args.brief)
+    return run_loop(decks, args.coach_backend, args.model, args.voice, args.n_targets,
+                    args.full_duplex, args.end_silence_ms, args.asr_model, args.debug, args.brief)
 
 
 if __name__ == "__main__":
