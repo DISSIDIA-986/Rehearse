@@ -249,9 +249,11 @@ Locked engineering calls (per "investigate + keep it simple"):
   `required_anchors` (numbers / named entities / acronyms / dates). Runtime: `covered` iff
   cosine(cumulative_answer, bullet) ≥ calibrated_threshold AND all required_anchors present
   (substring/fuzzy). Regex anchor-detection as cheap fallback if the LLM omits them.
-- **Extraction model:** `qwen3.5:9b` default (one-time, accuracy matters), `--extract-model`
-  override; live turns stay on `4b`. Use Ollama `format: json` structured output (don't parse
-  free text). Chunk a long doc by top-level `##`/`#`; extract per chunk; merge.
+- **Extraction model:** `qwen3.5:4b` default, `--extract-model qwen3.5:9b` override for higher
+  quality. (Originally specced 9b-default, but dogfooding a 32KB doc showed 9b at ~90s/chunk made
+  extraction take 30+ min; 4b is already warm as the coach and accurate enough.) Live turns stay
+  on `4b`. Ollama `format` JSON is requested but not always enforced, so parsing tolerates ```fences
+  / prose. Chunk a long doc by `##`/`#` AND pack small sections together; extract per chunk; merge.
 - **Persona:** extractor also classifies `content_type` (interview / terminology / speech /
   generic); `--persona` overrides. Coach prompt adapts. Plain-speech + warmth rules from
   `prompt_builder` are kept.
