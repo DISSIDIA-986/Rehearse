@@ -249,11 +249,15 @@ Locked engineering calls (per "investigate + keep it simple"):
   `required_anchors` (numbers / named entities / acronyms / dates). Runtime: `covered` iff
   cosine(cumulative_answer, bullet) ≥ calibrated_threshold AND all required_anchors present
   (substring/fuzzy). Regex anchor-detection as cheap fallback if the LLM omits them.
-- **Extraction model:** `qwen3.5:4b` default, `--extract-model qwen3.5:9b` override for higher
-  quality. (Originally specced 9b-default, but dogfooding a 32KB doc showed 9b at ~90s/chunk made
-  extraction take 30+ min; 4b is already warm as the coach and accurate enough.) Live turns stay
-  on `4b`. Ollama `format` JSON is requested but not always enforced, so parsing tolerates ```fences
-  / prose. Chunk a long doc by `##`/`#` AND pack small sections together; extract per chunk; merge.
+- **Extraction backend:** **MLX** (`mlx-community/Qwen3.5-4B-MLX-4bit`) by default via `mlx-lm`,
+  `--extract-backend {auto,mlx,ollama}` (auto = mlx if importable else ollama). Dogfood: MLX
+  ~2.6x faster than Ollama on this throughput-bound task (32KB doc ~3 min vs ~7.6), because per-token
+  throughput is ~2.8x (275 vs 96 chars/s) once thinking is off. (History: specced 9b-default → too
+  slow at ~90s/chunk → 4b → MLX-4b.) Key per-backend: Ollama uses `think:false`+`format`; MLX uses
+  the chat template's `enable_thinking=False` (no schema mode, so the tolerant parser handles ```fences
+  / prose). The LIVE LOOP stays on Ollama — measured MLX TTFT 0.37s ≈ Ollama 0.33s, no latency win,
+  and embeddings stay on Ollama (vector space = scoring contract). Chunk by `##`/`#` AND pack small
+  sections; extract per chunk; merge. Backend is chosen ONCE per doc and is part of the cache key.
 - **Persona:** extractor also classifies `content_type` (interview / terminology / speech /
   generic); `--persona` overrides. Coach prompt adapts. Plain-speech + warmth rules from
   `prompt_builder` are kept.

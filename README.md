@@ -3,7 +3,7 @@
 > 本地、离线、免费、开源的语音练习教练 —— 练英语口语对话，也能凭记忆复述任意 Markdown 笔记。在 Apple Silicon Mac 上跑。
 > A fully-local, offline, free, open-source voice coach for Apple Silicon Macs: practice English conversation, and recall any Markdown doc from memory — out loud.
 
-**Status:** 🟢 v1 + markdown-recall mode shipped (150 tests pass, `--smoke` green). Approved architecture below.
+**Status:** 🟢 v1 + markdown-recall mode shipped (156 tests pass, `--smoke` green). Approved architecture below.
 
 ## 这是什么 / What it is
 
@@ -97,15 +97,18 @@ points **from memory**, out loud, tracking coverage honestly.
 
 ```bash
 uv run rehearse --content markdown --path /abs/path/to/notes.md
-uv run rehearse --content markdown --path notes.md --extract-model qwen3.5:9b  # higher quality, slower
+uv run rehearse --content markdown --path notes.md --extract-backend ollama  # force Ollama
 ```
 
 How it works: the local LLM extracts the doc into a recall agenda. This is
 **one-time and cached** (written next to the file as `notes.md.recall.json` so you
 can see exactly what will be drilled) — a long doc is one LLM call per chunk, so the
-first run can take a few minutes with a `chunk N/total` progress line (the default
-extract model is the fast `qwen3.5:4b`; pass `--extract-model qwen3.5:9b` for higher
-quality if you can wait). A warm coach then asks each item and you answer from
+first run takes a few minutes with a `chunk N/total` progress line. Extraction runs
+on **MLX** by default (Apple-GPU, dogfooded ~2.6x faster than Ollama: a 32KB doc
+~3 min vs ~7.6), falling back to Ollama if mlx-lm isn't available; `--extract-backend
+ollama` forces Ollama. (Ollama is still required for the live coach and the
+embedding-based scoring — this only accelerates the one-time extraction.) A warm
+coach then asks each item and you answer from
 memory (manual turns — Enter to speak, Enter to send, so there's no time
 pressure). Coverage is scored **honestly**: a point counts as recalled only when
 your answer is both semantically on-topic AND contains its hard facts (the
@@ -114,7 +117,7 @@ The coach never sees the expected answers, so it can't leak them; it offers a
 hint only after you stall, then moves on so you're never stuck. It prints a
 coverage summary at the end.
 
-**Status:** v1 + markdown-recall mode implemented, 150 tests pass, `--smoke` green.
+**Status:** v1 + markdown-recall mode implemented, 156 tests pass, `--smoke` green.
 The live mic loop is the one path validated manually (the dev environment had no
 mic; the full ASR→LLM→TTS chain is covered by automated TTS→ASR round-trip +
 full-turn tests).

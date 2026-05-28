@@ -152,6 +152,52 @@ def test_extract_items_drops_empty_prompt_and_empty_points():
     assert [it.prompt for it in items] == ["real"]
 
 
+# --- backend selection (mlx vs ollama) -----------------------------------
+
+def test_resolve_backend_auto_prefers_mlx_when_available(monkeypatch):
+    from rehearse import mlx_llm
+    from rehearse.markdown_extractor import resolve_extract_chat
+    monkeypatch.setattr(mlx_llm, "mlx_available", lambda: True)
+    fn, model, name = resolve_extract_chat("auto")
+    assert name == "mlx" and model == mlx_llm.MLX_EXTRACT_MODEL and fn is mlx_llm.mlx_chat
+
+
+def test_resolve_backend_mlx_falls_back_to_ollama(monkeypatch, capsys):
+    from rehearse import mlx_llm
+    from rehearse.llm_client import chat as ollama_chat
+    from rehearse.markdown_extractor import resolve_extract_chat
+    monkeypatch.setattr(mlx_llm, "mlx_available", lambda: False)
+    fn, model, name = resolve_extract_chat("mlx")  # asked for mlx, unavailable
+    assert name == "ollama" and fn is ollama_chat
+    assert "falling back to Ollama" in capsys.readouterr().out
+
+
+def test_resolve_backend_explicit_ollama_even_if_mlx_present(monkeypatch):
+    from rehearse import mlx_llm
+    from rehearse.markdown_extractor import resolve_extract_chat
+    monkeypatch.setattr(mlx_llm, "mlx_available", lambda: True)
+    _, _, name = resolve_extract_chat("ollama")
+    assert name == "ollama"
+
+
+def test_cache_key_includes_backend(tmp_path):
+    # same text + same model, different backend => different cache file (no collision)
+    calls = [0]
+
+    def counting(messages, **kw):
+        calls[0] += 1
+        return ChatResult(text='{"items":[{"prompt":"P","expected_points":["a fact"]}]}',
+                          ttft_s=0.1, total_s=0.2, had_think_block=False)
+
+    md = tmp_path / "d.md"
+    md.write_text("# H\n- x\n", encoding="utf-8")
+    cd = tmp_path / "c"
+    load_markdown(md, chat_fn=counting, backend="ollama", cache_dir=cd, write_agenda=False)
+    load_markdown(md, chat_fn=counting, backend="mlx", cache_dir=cd, write_agenda=False)
+    assert calls[0] == 2  # different backend -> different cache file -> re-extracted
+    assert len(list(cd.glob("*.json"))) == 2
+
+
 # --- load_markdown caching + agenda --------------------------------------
 
 def test_load_caches_and_writes_agenda(tmp_path):

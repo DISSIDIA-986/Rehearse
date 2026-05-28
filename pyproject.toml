@@ -13,6 +13,7 @@ rehearse = "rehearse.main_loop:main"
 audio = [
     "faster-whisper>=1.0",   # ASR (CPU, int8)
     "mlx-audio>=0.2",        # Kokoro TTS on Apple GPU
+    "mlx-lm>=0.31,<0.33",    # local LLM on Apple GPU — one-time markdown extraction (~2.6x Ollama)
     "misaki[en]>=0.7",       # Kokoro English G2P / text processing
     # spaCy English model misaki needs (pin the wheel so it's reproducible/offline,
     # otherwise misaki downloads it at first run and uv sync keeps removing it):

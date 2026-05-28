@@ -1581,6 +1581,7 @@ audio = [
     { name = "faster-whisper" },
     { name = "misaki", extra = ["en"] },
     { name = "mlx-audio" },
+    { name = "mlx-lm" },
     { name = "sounddevice" },
     { name = "soxr" },
 ]
@@ -1599,6 +1600,7 @@ requires-dist = [
     { name = "faster-whisper", marker = "extra == 'audio'", specifier = ">=1.0" },
     { name = "misaki", extras = ["en"], marker = "extra == 'audio'", specifier = ">=0.7" },
     { name = "mlx-audio", marker = "extra == 'audio'", specifier = ">=0.2" },
+    { name = "mlx-lm", marker = "extra == 'audio'", specifier = ">=0.31,<0.33" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "silero-vad", marker = "extra == 'vad'", specifier = ">=5" },
     { name = "sounddevice", marker = "extra == 'audio'", specifier = ">=0.4" },

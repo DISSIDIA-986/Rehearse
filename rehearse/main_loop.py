@@ -129,6 +129,13 @@ def smoke(decks: list[str], model: str) -> int:
         print(f"[WARN] nomic-embed: {e} (practiced tracking will be off)")
 
     try:
+        from rehearse.markdown_extractor import resolve_extract_chat
+        _, eid, backend = resolve_extract_chat("auto")
+        print(f"[ok] markdown-extract backend: {backend} ({eid})")
+    except Exception as e:
+        print(f"[WARN] extract backend probe: {e}")
+
+    try:
         SileroVad()
         print("[ok] Silero VAD loaded")
     except Exception as e:
@@ -468,7 +475,8 @@ def _startup_recall(model: str, voice: str, asr_model: str):
 
 
 def run_recall(path: str, model: str, voice: str, asr_model: str,
-               extract_model: str, debug: bool) -> int:  # pragma: no cover - needs a microphone
+               extract_backend: str, extract_model: str | None,
+               debug: bool) -> int:  # pragma: no cover - needs a microphone
     """Markdown-recall mode: walk an agenda extracted from a doc, interviewing the
     user to recall each item FROM MEMORY (manual turns — recall needs thinking time,
     no VAD pressure). Separate from the English path; shares only speak_turn()."""
@@ -481,7 +489,7 @@ def run_recall(path: str, model: str, voice: str, asr_model: str,
         print(f"sounddevice unavailable ({e}). Install: uv sync --extra audio", file=sys.stderr)
         return 1
     from rehearse.coverage import CoverageTracker, has_substance
-    from rehearse.markdown_extractor import load_markdown
+    from rehearse.markdown_extractor import load_markdown, resolve_extract_chat
     from rehearse.pipeline import speak_turn
     from rehearse.recall_session import RecallSession
 
@@ -490,12 +498,11 @@ def run_recall(path: str, model: str, voice: str, asr_model: str,
         return 1
     asr, tts, embed = started
 
-    if extract_model != model:  # coach model is already warm; warm a different extractor
-        try:
-            warmup(model=extract_model)
-        except Exception:
-            pass
-    print(f"Extracting recall items from {path} (model {extract_model}).")
+    # Resolve the backend up front just to report it (mlx ~2.6x on Apple Silicon, else
+    # Ollama). load_markdown re-resolves internally so the cache key matches; the model
+    # is loaded LAZILY on the first chunk, so a cache hit never loads it.
+    _, extract_id, backend_name = resolve_extract_chat(extract_backend, extract_model)
+    print(f"Extracting recall items from {path} (backend {backend_name}, {extract_id}).")
     print("  This is ONE-TIME and cached — a long doc is one LLM call per chunk, so it")
     print("  can take a few minutes the first time. Progress below (Ctrl-C to abort):")
 
@@ -504,7 +511,8 @@ def run_recall(path: str, model: str, voice: str, asr_model: str,
         print(f"  extracting chunk {done}/{total}...", end=end, flush=True)
 
     try:
-        items = load_markdown(path, model=extract_model, on_progress=_progress)
+        items = load_markdown(path, backend=extract_backend, model=extract_model,
+                              on_progress=_progress)
     except KeyboardInterrupt:  # BaseException, not caught below — honor the "Ctrl-C to abort" hint
         print("\nExtraction aborted (nothing cached). Re-run to resume from scratch.", file=sys.stderr)
         return 130
@@ -682,9 +690,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="english = Anki conversation practice; markdown = recall a doc from memory")
     ap.add_argument("--path", default=None,
                     help="absolute path to the markdown file to recall (with --content markdown)")
+    ap.add_argument("--extract-backend", choices=["auto", "mlx", "ollama"], default="auto",
+                    help="LLM backend for one-time markdown->agenda extraction: auto (mlx if "
+                         "available, ~2.6x faster on Apple Silicon, else ollama)")
     ap.add_argument("--extract-model", default=None,
-                    help="LLM for one-time markdown->agenda extraction (default: qwen3.5:4b, "
-                         "fast; pass qwen3.5:9b for higher quality but slower)")
+                    help="override the extract model id for the chosen backend "
+                         "(mlx default: mlx-community/Qwen3.5-4B-MLX-4bit; ollama default: qwen3.5:4b)")
     ap.add_argument("--decks", nargs="*", default=None,
                     help="AnkiApp XML deck files (default: data/*.xml)")
     ap.add_argument("--model", default=DEFAULT_MODEL)
@@ -725,9 +736,8 @@ def main(argv: list[str] | None = None) -> int:
         if not Path(args.path).is_file():
             print(f"No such file: {args.path}", file=sys.stderr)
             return 1
-        from rehearse.markdown_extractor import EXTRACT_MODEL
         return run_recall(args.path, args.model, args.voice, args.asr_model,
-                          args.extract_model or EXTRACT_MODEL, args.debug)
+                          args.extract_backend, args.extract_model, args.debug)
 
     decks = args.decks or sorted(glob.glob("data/*.xml"))
     if not decks:

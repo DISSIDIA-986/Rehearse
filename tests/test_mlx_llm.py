@@ -1,0 +1,28 @@
+"""MLX extraction backend shim. The real-generate test is gated (loads a ~2.5GB
+MLX model); the shape/availability checks run everywhere (mlx_lm imports are lazy)."""
+
+import os
+
+import pytest
+
+from rehearse import mlx_llm
+
+
+def test_mlx_available_returns_bool():
+    assert isinstance(mlx_llm.mlx_available(), bool)
+
+
+def test_module_imports_without_mlx_lm():
+    # importing the shim must NOT import mlx_lm (keeps `uv run pytest` green w/o the extra)
+    import sys
+    assert "mlx_lm" not in sys.modules or mlx_llm.mlx_available()  # only present if actually installed
+
+
+@pytest.mark.skipif(not os.environ.get("REHEARSE_LLM_TESTS"),
+                    reason="set REHEARSE_LLM_TESTS=1 for a real MLX generate (loads a model)")
+def test_mlx_chat_returns_full_chatresult():
+    if not mlx_llm.mlx_available():
+        pytest.skip("mlx-lm not installed")
+    r = mlx_llm.mlx_chat([{"role": "user", "content": "Reply with exactly: OK"}], num_predict=8)
+    assert isinstance(r.text, str) and r.text
+    assert r.ttft_s is not None and r.total_s >= 0 and r.had_think_block is False

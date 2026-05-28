@@ -28,7 +28,7 @@ from rehearse.practice_item import PracticeItem
 # already warm (same as the coach model) and accurate enough for recall items.
 # Pass --extract-model qwen3.5:9b for higher quality if you can wait.
 EXTRACT_MODEL = "qwen3.5:4b"
-EXTRACTOR_VERSION = 6  # bump when prompt/schema/parse logic changes -> invalidates cache
+EXTRACTOR_VERSION = 7  # bump when prompt/schema/parse logic changes -> invalidates cache
 # Generous cap: num_predict is a ceiling, not a target — the model stops when the
 # JSON is done. Make it big enough that a dense chunk's items never truncate mid-
 # JSON (truncated JSON fails to parse -> silent regex fallback with meta noise).
@@ -255,16 +255,36 @@ def _write_agenda(path: Path, items: list[PracticeItem]) -> None:
         pass  # transparency is a nicety; never fail the session over it
 
 
-def load_markdown(path, *, model: str = EXTRACT_MODEL, chat_fn=chat,
+def resolve_extract_chat(backend: str = "auto", model: str | None = None):
+    """Pick the extraction backend ONCE, up front (never mid-document): returns
+    (chat_fn, model_id, backend_name). 'auto' uses MLX if importable (~2.6x on Apple
+    Silicon), else Ollama. If MLX is requested but unavailable, fall back to Ollama
+    for the whole run (document-level, so a doc never mixes backends in one cache entry)."""
+    if backend in ("auto", "mlx"):
+        from rehearse.mlx_llm import MLX_EXTRACT_MODEL, mlx_available, mlx_chat  # lazy
+        if mlx_available():
+            return mlx_chat, (model or MLX_EXTRACT_MODEL), "mlx"
+        if backend == "mlx":
+            print("  (mlx-lm unavailable — falling back to Ollama for extraction)")
+    return chat, (model or EXTRACT_MODEL), "ollama"
+
+
+def load_markdown(path, *, backend: str = "auto", model: str | None = None, chat_fn=None,
                   cache_dir=_CACHE_DIR, write_agenda: bool = True,
                   on_progress=None) -> list[PracticeItem]:
-    """Load + extract recall items. Cached by (extractor version, model, content)
-    so a model/prompt/schema change re-extracts instead of replaying stale items.
-    Writes a visible agenda on BOTH cache hit and miss (C9)."""
+    """Load + extract recall items. Backend (mlx/ollama) is chosen up front. Cached by
+    (extractor version, backend, model, content) so a backend/model/prompt change
+    re-extracts instead of replaying stale items. Writes a visible agenda on BOTH
+    cache hit and miss (C9). An explicit chat_fn (tests/custom) skips backend resolution."""
     path = Path(path)
     text = path.read_text(encoding="utf-8")
     cache_dir = Path(cache_dir)
-    cache = cache_dir / f"{_hash(f'{EXTRACTOR_VERSION}|{model}|{text}')}.json"
+    if chat_fn is None:
+        chat_fn, model, backend_name = resolve_extract_chat(backend, model)
+    else:
+        backend_name = "ollama" if backend == "auto" else backend
+        model = model or EXTRACT_MODEL
+    cache = cache_dir / f"{_hash(f'{EXTRACTOR_VERSION}|{backend_name}|{model}|{text}')}.json"
 
     if cache.exists():
         items = [PracticeItem(**d) for d in json.loads(cache.read_text(encoding="utf-8"))]
