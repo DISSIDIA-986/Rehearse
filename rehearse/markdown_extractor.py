@@ -118,6 +118,8 @@ def chunk_markdown(text: str, max_chars: int = MAX_CHUNK_CHARS,
             start = 0
             while start < len(p):
                 out.append(p[start:start + max_chars])
+                if start + max_chars >= len(p):
+                    break  # this window already reached the end — no redundant tail
                 start += step
         elif not buf:
             buf = p
@@ -209,23 +211,30 @@ def extract_items(md_text: str, *, model: str = EXTRACT_MODEL, chat_fn=chat,
     return merged
 
 
-_FENCE_OPEN = re.compile(r"^```[a-zA-Z]*\n?")
-_FENCE_CLOSE = re.compile(r"\n?```$")
+_FENCED_JSON = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL | re.IGNORECASE)
 
 
 def _parse_json_obj(text: str) -> dict:
-    """Parse the model's JSON even when it wraps it in a ```json fence or adds
-    prose — Ollama's schema `format` is not always enforced (observed qwen3.5:9b
-    emitting fenced JSON), so a raw json.loads silently failed and every chunk fell
-    back to regex. Strip fences, else grab the outermost {...}."""
-    t = _FENCE_CLOSE.sub("", _FENCE_OPEN.sub("", text.strip())).strip()
+    """Parse the model's JSON even when it wraps it in a ```json fence or adds prose
+    — Ollama's schema `format` is not always enforced (observed qwen3.5 emitting
+    fenced JSON), so a raw json.loads silently failed and every chunk fell back to
+    regex. Try, in order: clean parse, the contents of a ```fence``` anywhere, then
+    the outermost {...}."""
+    t = text.strip()
     try:
         return json.loads(t)
     except Exception:
-        i, j = t.find("{"), t.rfind("}")
-        if i != -1 and j > i:
-            return json.loads(t[i:j + 1])
-        raise
+        pass
+    m = _FENCED_JSON.search(t)  # fenced block even with leading/trailing prose
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            pass
+    i, j = t.find("{"), t.rfind("}")
+    if i != -1 and j > i:
+        return json.loads(t[i:j + 1])
+    raise json.JSONDecodeError("no JSON object found", t or " ", 0)
 
 
 def _hash(text: str) -> str:

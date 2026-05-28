@@ -1,8 +1,8 @@
 """Tests for the markdown -> PracticeItem extractor.
 
-Deterministic tests use a fake chat_fn (no model). The real-9b extraction test is
-gated behind REHEARSE_LLM_TESTS=1 so routine `uv run pytest` stays fast (loading
-qwen3.5:9b costs ~30s cold).
+Deterministic tests use a fake chat_fn (no model). The real-model extraction test
+is gated behind REHEARSE_LLM_TESTS=1 so routine `uv run pytest` stays fast (it hits
+the default extract model, qwen3.5:4b).
 """
 
 import json
@@ -28,6 +28,8 @@ def test_parse_json_obj_handles_fences_and_prose():
     assert _parse_json_obj('Sure, here: {"items": [{"prompt": "p"}]} done') == {
         "items": [{"prompt": "p"}]}
     assert _parse_json_obj('{"items": []}') == {"items": []}
+    # leading prose that itself contains braces, before a fenced block (review fix)
+    assert _parse_json_obj('Note {not json}\n```json\n{"items": []}\n```') == {"items": []}
 
 
 def test_extract_items_recovers_fenced_json_not_fallback():
@@ -66,6 +68,15 @@ def test_chunk_heading_aware():
     chunks = chunk_markdown(text, max_chars=200)
     assert len(chunks) >= 2
     assert any("## A" in c for c in chunks) and any("## B" in c for c in chunks)
+
+
+def test_chunk_windowing_has_no_redundant_tail():
+    # an oversized section windows with overlap but must not emit a tiny tail that's
+    # already covered by the previous window (review fix: wasted LLM call)
+    chunks = chunk_markdown("x" * 125, max_chars=50, overlap=10)
+    assert len(chunks) == 3  # was 4 (a redundant 5-char tail)
+    assert "".join(c for c in chunks)  # still covers content
+    assert len(chunks[-1]) == 45  # last window reaches the end, not a stub
 
 
 def test_chunk_packs_many_small_sections():
@@ -165,10 +176,10 @@ def test_load_caches_and_writes_agenda(tmp_path):
     assert len(items2) == 1 and calls[0] == 1  # cache hit -> no new LLM call
 
 
-# --- real 9b extraction (opt-in, slow) -----------------------------------
+# --- real extraction (opt-in, slow) --------------------------------------
 
 @pytest.mark.skipif(not os.environ.get("REHEARSE_LLM_TESTS"),
-                    reason="set REHEARSE_LLM_TESTS=1 to run real qwen3.5:9b extraction (~30s cold)")
+                    reason="set REHEARSE_LLM_TESTS=1 to run real qwen3.5:4b extraction")
 def test_real_extract_resume(tmp_path):
     resume = Path("/Users/niuyp/Documents/github.com/portfolio2/resume/ai-engineer.md")
     if not resume.exists():

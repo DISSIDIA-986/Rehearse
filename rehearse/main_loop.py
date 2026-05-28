@@ -505,6 +505,9 @@ def run_recall(path: str, model: str, voice: str, asr_model: str,
 
     try:
         items = load_markdown(path, model=extract_model, on_progress=_progress)
+    except KeyboardInterrupt:  # BaseException, not caught below — honor the "Ctrl-C to abort" hint
+        print("\nExtraction aborted (nothing cached). Re-run to resume from scratch.", file=sys.stderr)
+        return 130
     except Exception as e:
         print(f"Could not read/extract {path}: {e}", file=sys.stderr)
         return 1
@@ -680,7 +683,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--path", default=None,
                     help="absolute path to the markdown file to recall (with --content markdown)")
     ap.add_argument("--extract-model", default=None,
-                    help="LLM for one-time markdown->agenda extraction (default: accuracy model)")
+                    help="LLM for one-time markdown->agenda extraction (default: qwen3.5:4b, "
+                         "fast; pass qwen3.5:9b for higher quality but slower)")
     ap.add_argument("--decks", nargs="*", default=None,
                     help="AnkiApp XML deck files (default: data/*.xml)")
     ap.add_argument("--model", default=DEFAULT_MODEL)
