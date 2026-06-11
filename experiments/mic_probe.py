@@ -40,12 +40,47 @@ def _capture(seconds: float, in_sr: int, block: int) -> np.ndarray | None:
     return drain_utterance(q, in_sr)  # the real loop helper
 
 
+def _run_vad(utt: np.ndarray, in_sr: int) -> None:
+    """Validate auto-mode endpointing: feed REAL captured speech (then appended
+    silence) through real Silero VAD + the EndpointDetector state machine and
+    confirm it fires 'start' on speech and 'end' on the speech->silence edge."""
+    from rehearse.vad import EndpointConfig, EndpointDetector, SileroVad
+
+    a = utt if in_sr == audio_io.ASR_SR else audio_io.resample(utt, in_sr, audio_io.ASR_SR)
+    silence = np.zeros(int(1.5 * audio_io.ASR_SR), dtype=np.float32)  # > end_silence_ms
+    stream = np.concatenate([a, silence])
+
+    vad = SileroVad()
+    vad.prob(np.zeros(SileroVad.FRAME, dtype=np.float32)); vad.reset()  # warm
+    det = EndpointDetector(EndpointConfig())  # default: start 64ms, end 1000ms silence
+    F = SileroVad.FRAME
+    n_speech_frames = len(a) // F
+    probs: list[float] = []
+    events: list[tuple] = []
+    for i in range(0, len(stream) - F + 1, F):
+        p = vad.prob(stream[i:i + F])
+        probs.append(p)
+        ev = det.update(p)
+        if ev:
+            events.append((i // F, ev, round(p, 2)))
+
+    sp = probs[:n_speech_frames] or [0.0]
+    voiced = sum(1 for p in sp if p >= 0.5) / len(sp)
+    print(f"VAD on REAL speech: {len(sp)} frames  voiced={voiced:.0%}  "
+          f"mean={float(np.mean(sp)):.2f} max={max(sp):.2f}")
+    print(f"VAD on appended silence: mean={float(np.mean(probs[n_speech_frames:] or [0])):.2f}")
+    print(f"endpoint events (frame, kind, prob): {events}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seconds", type=float, default=6.0)
     ap.add_argument("--asr-model", default="small.en")
     ap.add_argument("--round-trip", action="store_true",
                     help="also run the full ASR->coach->TTS pipeline and play the reply")
+    ap.add_argument("--vad", action="store_true",
+                    help="run real Silero VAD + EndpointDetector over the capture "
+                         "(+ appended silence) to validate auto-mode endpointing")
     args = ap.parse_args()
 
     in_sr, out_sr, block = io_rates(sd)
@@ -65,6 +100,9 @@ def main() -> int:
     print(f"captured {len(utt) / audio_io.ASR_SR:.1f}s @16k  rms={rms:.4f} peak={peak:.3f}")
     if rms < 1e-4:
         print("!! near-silence — is the DJI mic actually picking up the podcast?")
+
+    if args.vad:
+        _run_vad(utt, in_sr)
 
     t0 = time.monotonic()
     text = asr.transcribe(utt)
