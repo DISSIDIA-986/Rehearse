@@ -34,7 +34,8 @@ def chunk_sentences(text: str, max_chars: int = 200) -> list[str]:
     start = 0
     for m in _SENT_END_RE.finditer(text):
         candidate = text[start:m.end(0)]
-        last_word = candidate.split()[-1].lower() if candidate.split() else ""
+        words = candidate.split()
+        last_word = words[-1].lower() if words else ""
         if last_word in _ABBREV:
             continue  # keep going; this period is an abbreviation
         sentences.append(candidate.strip())

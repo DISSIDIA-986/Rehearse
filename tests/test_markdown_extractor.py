@@ -15,12 +15,35 @@ from rehearse.llm_client import ChatResult
 from rehearse.markdown_extractor import (
     _EXTRACT_PROMPT,
     _fallback_items,
+    _merge_substantive,
     _parse_json_obj,
     chunk_markdown,
     extract_items,
     extract_items_fast,
     load_markdown,
 )
+from rehearse.practice_item import PracticeItem
+
+
+def test_merge_substantive_drops_contentfree_points():
+    it = PracticeItem(id="a", prompt="p", expected_points=["the a an of to", "Python is fast"])
+    out = _merge_substantive([it])
+    assert len(out) == 1
+    assert out[0].expected_points == ["Python is fast"]  # stopword-only point dropped
+
+
+def test_merge_substantive_drops_item_with_no_recallable_points():
+    empty = PracticeItem(id="a", prompt="p", expected_points=["the of to", "a an"])
+    keep = PracticeItem(id="b", prompt="q", expected_points=["GDP grew 5%"])
+    out = _merge_substantive([empty, keep])
+    assert [it.id for it in out] == ["b"]  # the all-stopword item vanishes
+
+
+def test_merge_substantive_dedupes_by_key():
+    a = PracticeItem(id="dup", prompt="p", expected_points=["first wins"])
+    b = PracticeItem(id="dup", prompt="p", expected_points=["second dropped"])
+    out = _merge_substantive([a, b])
+    assert len(out) == 1 and out[0].expected_points == ["first wins"]
 
 
 def test_parse_json_obj_handles_fences_and_prose():
