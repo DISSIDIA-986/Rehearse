@@ -13,12 +13,16 @@
 - **Depends on:** MVP 跑通且证明注入有效。
 
 ### T-P2-2: 跨会话"无提示自发产出"追踪（SQLite 间隔复习）
-- **What:** 用 SQLite 记录每个句子的练习状态，识别"用户之后无提示自发产出"这一最高级掌握信号，做真正的间隔复习排程。
-- **Why:** MVP 的"练过"只到"复述/改写命中"（D3=A 的 7/10）；这条补齐到 10/10。
-- **Pros:** 真正的 conversational spaced repetition 闭环。
-- **Cons:** MVP 阶段过重。
-- **Context:** D3 选 A 时明确把"自发产出"划到 Phase 2。
-- **Depends on:** T-P2-1 或独立。
+- **2a [DONE 2026-06-11]** 跨会话持久化：`rehearse/practice_store.py`（stdlib sqlite3，零新依赖）
+  把每句的 practice count + last_ts 存到 `~/.local/share/rehearse/practice.db`，启动时 `load_stats()`
+  载入、每轮命中后 `record_practiced()` 落盘 → `select_targets` 现在跨会话挑"最久未练"，
+  真正闭合 conversational spaced repetition。`--no-persist` 退回 v1 纯内存；`--practice-db` 指定路径。
+  内存/磁盘逐字符一致、损坏库隔离重建、WAL、锁库快速降级、错误 schema 隔离——全部有测（25 个用例）。
+  三轮 Codex 对抗审查 CLEAN。
+- **2b [TODO]** "无提示自发产出"检测：最高级掌握信号（D3=A 的 10/10）。延迟——需更严阈值 + 排除当轮
+  active 目标 + 事件日志，证明不污染排程后再接入。`practice_store` 的 schema 已留 `user_version` 迁移位。
+- **Why:** MVP 的"练过"只到"复述/改写命中"（D3=A 的 7/10）；2b 补齐到 10/10。
+- **Context:** D3 选 A 时明确把"自发产出"划到 Phase 2。2a 由 Codex+Claude 子代理联合评审选为 Phase 2 首做项。
 
 ### T-P2-3: 全双工外放 + 真 AEC
 - **What:** 接 WebRTC AEC 子系统，实现裸机外放且随时语音打断。

@@ -89,6 +89,17 @@ Defaults: half-duplex (mute mic while the assistant speaks — works on the Mac
 speaker without echo), continuous until you say "stop" or hit Ctrl-C, press Enter
 to cut off a reply. On exit it prints latency p50/p95 and your practiced count.
 
+**Spaced repetition persists across sessions.** Each sentence you practice is
+saved to `~/.local/share/rehearse/practice.db` (SQLite), so the next session
+keeps surfacing your least-practiced sentences first — real conversational
+spaced repetition, not a per-run reset.
+```bash
+uv run rehearse --no-persist           # in-memory only (don't save/load history)
+uv run rehearse --practice-db /path/db # use a specific stats file
+```
+A corrupt/unreadable DB is quarantined and recreated automatically; a save error
+degrades to a warning and never interrupts a turn.
+
 The LLM backend auto-picks **MLX** (Apple-GPU, faster) if `mlx-lm` is present, else
 Ollama. Override per role with `--coach-backend {auto,mlx,ollama}` (live coach) or
 `--extract-backend {auto,mlx,ollama}` (one-time markdown extraction). Ollama is still

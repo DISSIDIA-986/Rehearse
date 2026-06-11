@@ -89,6 +89,8 @@ def test_run_menu_markdown_dispatches_with_expanded_path(monkeypatch, tmp_path):
     ["--menu", "--manual-turns"],
     ["--menu", "--content", "markdown", "--path", "/x.md"],
     ["--menu", "--full-duplex"],
+    ["--menu", "--no-persist"],
+    ["--menu", "--practice-db", "/tmp/x.db"],
 ])
 def test_menu_rejects_combined_mode_flags(argv, capsys):
     # --menu is standalone; combining it with a mode flag must error, not silently override
