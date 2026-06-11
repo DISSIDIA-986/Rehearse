@@ -164,6 +164,21 @@ def _fallback_items(chunk: str, prefix: str) -> list[PracticeItem]:
     return items
 
 
+def _merge_substantive(items: list[PracticeItem]) -> list[PracticeItem]:
+    """Keep only points that carry recallable content, drop items left empty, and
+    dedupe by key — overlap windows on a huge section can yield the same item twice
+    (C5 merge). Shared by both the LLM and fast extraction paths."""
+    seen: set[str] = set()
+    merged: list[PracticeItem] = []
+    for it in items:
+        pts = [p for p in it.expected_points if has_substance(p)]
+        if pts and it.key not in seen:
+            seen.add(it.key)
+            it.expected_points = pts
+            merged.append(it)
+    return merged
+
+
 def extract_items(md_text: str, *, model: str = EXTRACT_MODEL, chat_fn=chat,
                   on_progress=None) -> list[PracticeItem]:
     """Per chunk: LLM(format=json) -> PracticeItems; fall back to heading+bullets on
@@ -197,18 +212,7 @@ def extract_items(md_text: str, *, model: str = EXTRACT_MODEL, chat_fn=chat,
             items.extend(_fallback_items(chunk, f"c{ci}"))
         if on_progress:
             on_progress(ci + 1, total)
-    # Keep only substantive points (a content-free 'point' has nothing to recall),
-    # drop items left empty, and dedupe by key — overlap windows on a huge section
-    # can yield the same item twice (C5 merge).
-    seen: set[str] = set()
-    merged: list[PracticeItem] = []
-    for it in items:
-        pts = [p for p in it.expected_points if has_substance(p)]
-        if pts and it.key not in seen:
-            seen.add(it.key)
-            it.expected_points = pts
-            merged.append(it)
-    return merged
+    return _merge_substantive(items)
 
 
 def extract_items_fast(md_text: str) -> list[PracticeItem]:
@@ -219,16 +223,7 @@ def extract_items_fast(md_text: str) -> list[PracticeItem]:
     items: list[PracticeItem] = []
     for ci, chunk in enumerate(chunk_markdown(md_text)):
         items.extend(_fallback_items(chunk, f"c{ci}"))
-    # same substance + dedup filter as the LLM path
-    seen: set[str] = set()
-    merged: list[PracticeItem] = []
-    for it in items:
-        pts = [p for p in it.expected_points if has_substance(p)]
-        if pts and it.key not in seen:
-            seen.add(it.key)
-            it.expected_points = pts
-            merged.append(it)
-    return merged
+    return _merge_substantive(items)  # same substance + dedup filter as the LLM path
 
 
 _FENCED_JSON = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL | re.IGNORECASE)
