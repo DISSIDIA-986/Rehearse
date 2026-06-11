@@ -159,6 +159,21 @@ def test_shadow_unaided_excludes_active_targets(tmp_path):
         store.close()
 
 
+def test_shadow_unaided_excludes_this_turns_prompted_keys(tmp_path):
+    store, _ = _open_store(tmp_path / "p.db", no_persist=False)
+    try:
+        s = _sent("Let's grab a coffee.")
+        stats = {s.key: PracticeStat(count=1)}
+        # s was a PROMPTED hit this turn (exclude_keys) -> not double-counted as
+        # unaided even at sim 1.0, even though it isn't an active target
+        out = _shadow_unaided(True, store, stats, [s], [], "coffee", _ones_embed, {},
+                              now=1.0, exclude_keys=[s.key])
+        assert out is None
+        assert store.unaided_events() == []
+    finally:
+        store.close()
+
+
 def test_shadow_unaided_never_raises_on_embed_error(tmp_path):
     store, _ = _open_store(tmp_path / "p.db", no_persist=False)
     try:
