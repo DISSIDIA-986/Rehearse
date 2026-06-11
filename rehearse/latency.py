@@ -35,6 +35,16 @@ class TurnTrace:
     tts_total_s: float | None = None
     felt_s: float | None = None  # eou -> first audio out, set by the loop shell
 
+    @classmethod
+    def from_turn(cls, turn, felt_s: float | None = None) -> "TurnTrace":
+        """Build a trace from a pipeline turn (TurnResult or SpokenTurn — both
+        carry asr_s/ttft_s/tts_ttfa_s/tts_s). `felt_s` is the loop-measured
+        eou -> first-audio time (the only stage the shell, not the primitive,
+        can time). Dedups the identical construction across the loop modes."""
+        return cls(asr_s=turn.asr_s, ttft_s=turn.ttft_s,
+                   tts_ttfa_s=turn.tts_ttfa_s, tts_total_s=turn.tts_s,
+                   felt_s=felt_s)
+
     def one_line(self) -> str:
         """Compact per-turn line for the live loop, e.g.
         'latency: felt=1.42s | asr=0.31 ttft=0.62 tts_ttfa=0.28'."""
