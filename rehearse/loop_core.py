@@ -7,10 +7,50 @@ deterministically with a fake VAD (Codex final-review gap #6 / D4).
 
 from __future__ import annotations
 
+import queue
+
 import numpy as np
 
+from rehearse import audio_io
 from rehearse.audio_io import RingBuffer
 from rehearse.vad import EndpointDetector, VadState
+
+# samples @16k that the loop reads per audio frame (Silero's 32ms window). The
+# device captures at its native rate; `io_rates` maps that back to this window.
+FRAME = 512
+
+
+def io_rates(sd, frame: int = FRAME) -> tuple[int, int, int]:
+    """Resolve (in_sr, out_sr, block) from the audio device.
+
+    INDEPENDENT per-direction fallback: a failed output-rate query must not also
+    discard a good input rate (and vice versa) — input drives VAD/ASR, output only
+    playback. `block` is the device-rate blocksize that maps to one `frame`-sample
+    @16k window. Pure over an injected sounddevice-like `sd` (testable, no mic)."""
+    def _rate(kind: str) -> int:
+        try:
+            return int(sd.query_devices(kind=kind)["default_samplerate"])
+        except Exception:
+            return audio_io.DEFAULT_DEVICE_SR
+    in_sr = _rate("input")
+    out_sr = _rate("output")
+    block = max(1, round(frame * in_sr / audio_io.ASR_SR))
+    return in_sr, out_sr, block
+
+
+def drain_utterance(audio_q, in_sr: int) -> np.ndarray | None:
+    """Drain every queued mono block and resample the concatenation ONCE to 16k
+    (resampling per block would add boundary artifacts). None if nothing queued.
+    The shared tail of the manual / recall record step."""
+    blocks: list[np.ndarray] = []
+    try:
+        while True:
+            blocks.append(audio_q.get_nowait())
+    except queue.Empty:
+        pass
+    if not blocks:
+        return None
+    return audio_io.resample(np.concatenate(blocks), in_sr, audio_io.ASR_SR)
 
 # Spoken end-of-session phrases (normalized: lowercased, trailing punctuation stripped).
 _STOP = {

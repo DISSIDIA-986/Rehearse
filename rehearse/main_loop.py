@@ -25,14 +25,18 @@ from rehearse.anki_loader import load_sentences
 from rehearse.duplex import HalfDuplexGate
 from rehearse.llm_client import DEFAULT_MODEL, think_probe, warmup
 from rehearse.latency import LatencyAggregator, TurnTrace
-from rehearse.loop_core import UtteranceAssembler, is_stop
+from rehearse.loop_core import (
+    UtteranceAssembler,
+    drain_utterance,
+    io_rates,
+    is_stop,
+)
 from rehearse.pipeline import respond
 from rehearse.prompt_builder import build_system_prompt
 from rehearse.session_seeder import PracticeStat, select_targets
 from rehearse.vad import EndpointConfig, EndpointDetector, SileroVad
 
 PREROLL_MS = 200
-FRAME = 512  # samples @16k (Silero window, 32ms)
 
 
 def _load_models(asr_model: str = "small.en", voice: str = ""):
@@ -202,15 +206,7 @@ def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str
     # Capture at the device's NATIVE rate (PortAudio won't always accept 16k),
     # resample each block to 16k once for VAD/ASR. Input device stays open all
     # session (Codex blind-spot #2: never reopen per turn).
-    try:
-        in_sr = int(sd.query_devices(kind="input")["default_samplerate"])
-    except Exception:
-        in_sr = audio_io.DEFAULT_DEVICE_SR
-    block = max(1, round(FRAME * in_sr / audio_io.ASR_SR))
-    try:
-        out_sr = int(sd.query_devices(kind="output")["default_samplerate"])
-    except Exception:
-        out_sr = audio_io.DEFAULT_DEVICE_SR
+    in_sr, out_sr, block = io_rates(sd)
 
     debug_dir = "debug" if debug else None
     gate = HalfDuplexGate(full_duplex=full_duplex)
@@ -335,13 +331,9 @@ def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str
                         perr_shown = True
                     practiced_on = False
                 if practiced_on:
-                    attempts += len(targets)
-                    for h in r.practiced:
-                        hits += 1
-                        k = _key(sentences, h.target)
-                        practiced_keys.add(k)
-                        st = stats.setdefault(k, PracticeStat())
-                        st.count += 1; st.last_ts = time.time()
+                    da, dh = apply_practiced(r.practiced, len(targets), sentences,
+                                             stats, practiced_keys, time.time())
+                    attempts += da; hits += dh
                 history += [{"role": "user", "content": r.user_text},
                             {"role": "assistant", "content": r.reply_text}]
                 history = history[-12:]  # keep context short
@@ -369,6 +361,25 @@ def _key(sentences, target_text):
     return target_text.lower()
 
 
+def apply_practiced(practiced, n_targets, sentences, stats, practiced_keys, now):
+    """Fold a turn's practiced hits into the session stats (D3 bookkeeping shared
+    by the auto + manual English loops). Mutates `stats` and `practiced_keys` in
+    place; returns (attempts_delta, hits_delta) for the running counters. `now` is
+    injected (time.time()) so it is unit-testable without a clock.
+
+    All hits in one turn share `now` — the prior inline code called time.time()
+    per hit, so same-turn hits could differ by microseconds. That drift never
+    affected the only consumer (select_targets' last_ts ordering); one stamp per
+    turn is both cleaner and deterministic."""
+    for h in practiced:
+        k = _key(sentences, h.target)
+        practiced_keys.add(k)
+        st = stats.setdefault(k, PracticeStat())
+        st.count += 1
+        st.last_ts = now
+    return n_targets, len(practiced)
+
+
 def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: str, n_targets: int,
                asr_model: str, debug: bool, brief: bool) -> int:  # pragma: no cover - needs a microphone
     """Manual turns: you press Enter to start, speak as long as you want (pause to
@@ -387,12 +398,7 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
     if started is None:
         return 1
     sentences, asr, tts, practiced_on, coach_chat, _mid, _backend = started
-    try:
-        in_sr = int(sd.query_devices(kind="input")["default_samplerate"])
-        out_sr = int(sd.query_devices(kind="output")["default_samplerate"])
-    except Exception:
-        in_sr = out_sr = audio_io.DEFAULT_DEVICE_SR
-    block = max(1, round(FRAME * in_sr / audio_io.ASR_SR))
+    in_sr, out_sr, block = io_rates(sd)
     debug_dir = "debug" if debug else None
 
     audio_q: queue.Queue = queue.Queue(maxsize=8000)
@@ -425,16 +431,9 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
                 recording.set()
                 input("[recording... Enter when you're done] ")
                 recording.clear()
-                blocks = []
-                try:
-                    while True:
-                        blocks.append(audio_q.get_nowait())
-                except queue.Empty:
-                    pass
-                if not blocks:
+                utterance = drain_utterance(audio_q, in_sr)
+                if utterance is None:
                     print("(heard nothing — try again)\n"); continue
-                # resample the whole utterance ONCE (no per-block boundary artifacts)
-                utterance = audio_io.resample(np.concatenate(blocks), in_sr, audio_io.ASR_SR)
                 t_end = time.monotonic()
                 targets = select_targets(sentences, stats, n=n_targets)
                 r = respond(utterance, history, targets, asr=asr, tts=tts,
@@ -454,10 +453,9 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
                     _save_debug(debug_dir, utterance, r.user_text, r.reply_text,
                                 f"asr={r.asr_s:.2f}s tts={r.tts_s:.2f}s")
                 if practiced_on:
-                    attempts += len(targets)
-                    for h in r.practiced:
-                        hits += 1; k = _key(sentences, h.target); pkeys.add(k)
-                        st = stats.setdefault(k, PracticeStat()); st.count += 1; st.last_ts = time.time()
+                    da, dh = apply_practiced(r.practiced, len(targets), sentences,
+                                             stats, pkeys, time.time())
+                    attempts += da; hits += dh
                 history += [{"role": "user", "content": r.user_text},
                             {"role": "assistant", "content": r.reply_text}]
                 history = history[-12:]
@@ -572,12 +570,7 @@ def run_recall(path: str, coach_backend: str, model: str | None,
     # coach_chat was already resolved + warmed in _startup_recall (the live coach must
     # be ready before the first turn — extraction may be lazy, the coach cannot).
 
-    try:
-        in_sr = int(sd.query_devices(kind="input")["default_samplerate"])
-        out_sr = int(sd.query_devices(kind="output")["default_samplerate"])
-    except Exception:
-        in_sr = out_sr = audio_io.DEFAULT_DEVICE_SR
-    block = max(1, round(FRAME * in_sr / audio_io.ASR_SR))
+    in_sr, out_sr, block = io_rates(sd)
     debug_dir = "recall-debug" if debug else None
 
     audio_q: queue.Queue = queue.Queue(maxsize=8000)
@@ -605,15 +598,7 @@ def run_recall(path: str, coach_backend: str, model: str | None,
         recording.set()
         input("[recording... Enter when you're done] ")
         recording.clear()
-        blocks = []
-        try:
-            while True:
-                blocks.append(audio_q.get_nowait())
-        except queue.Empty:
-            pass
-        if not blocks:
-            return None
-        return audio_io.resample(np.concatenate(blocks), in_sr, audio_io.ASR_SR)
+        return drain_utterance(audio_q, in_sr)
 
     history: list[dict[str, str]] = []
     latency = LatencyAggregator()
