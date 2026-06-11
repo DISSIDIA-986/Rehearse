@@ -100,6 +100,12 @@ uv run rehearse --practice-db /path/db # use a specific stats file
 A corrupt/unreadable DB is quarantined and recreated automatically; a save error
 degrades to a warning and never interrupts a turn.
 
+See your progress between sessions (offline, read-only):
+```bash
+uv run rehearse-stats                  # most/least-practiced sentences + totals
+uv run rehearse-stats --practice-db /path/db
+```
+
 The LLM backend auto-picks **MLX** (Apple-GPU, faster) if `mlx-lm` is present, else
 Ollama. Override per role with `--coach-backend {auto,mlx,ollama}` (live coach) or
 `--extract-backend {auto,mlx,ollama}` (one-time markdown extraction). Ollama is still
