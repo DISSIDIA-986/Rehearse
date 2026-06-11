@@ -16,12 +16,14 @@ def test_resample_empty():
 
 
 def test_resample_length_ratio_48k_to_16k():
+    pytest.importorskip("soxr")  # real downsampling needs the audio extra
     a = np.zeros(4800, dtype=np.float32)  # 0.1s @ 48k
     out = resample(a, 48000, 16000)
     assert abs(len(out) - 1600) <= 1  # ~0.1s @ 16k
 
 
 def test_resample_preserves_low_frequency():
+    pytest.importorskip("soxr")  # real downsampling needs the audio extra
     sr_in, sr_out, f = 48000, 16000, 440.0
     t = np.arange(sr_in) / sr_in  # 1 second
     sig = np.sin(2 * np.pi * f * t).astype(np.float32)

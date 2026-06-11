@@ -44,6 +44,11 @@ def ollama_embed(
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:  # 404 = model not pulled, 500, ...
+        body = e.read().decode("utf-8", "replace")[:200] if e.fp else ""
+        raise RuntimeError(
+            f"Ollama embed HTTP {e.code} (model {model!r}): {body or e.reason}"
+        ) from e
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
         raise RuntimeError(f"Ollama embed request failed: {e}") from e
     embs = data.get("embeddings")

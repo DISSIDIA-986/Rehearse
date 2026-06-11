@@ -82,7 +82,12 @@ class Sentence:
 def parse_deck(path: str | Path) -> list[Sentence]:
     """Parse a single AnkiApp XML export into Sentences."""
     path = Path(path)
-    root = ET.parse(path).getroot()
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError as e:
+        raise RuntimeError(f"deck {path.name!r} is not valid XML: {e}") from e
+    except OSError as e:  # missing / unreadable file
+        raise RuntimeError(f"cannot read deck {path}: {e}") from e
     deck_name = root.get("name") or path.stem
 
     # Determine which field is the front/prompt field from the schema.
