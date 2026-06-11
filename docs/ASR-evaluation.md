@@ -80,6 +80,37 @@ Parakeet on the GPU regresses coach TTFT p95 (the forced-overlap test).
 
 `--only whisper` runs the baseline without installing the parakeet extra.
 
+## LLM backend (mlx-lm vs Ollama) — frozen 2026-06-10
+
+Adversarial follow-up: is keeping mlx-lm over Ollama worth it, and should we push
+further (LLM→TTS streaming, prompt/KV-cache reuse)? Measured on this M1 Max
+(`experiments/mlx_loop_probe.py`, `experiments/mlx_extract_probe.py`):
+
+| | TTFT | first-audio | total turn | decode |
+|---|---|---|---|---|
+| Ollama qwen3.5:4b | 0.39s | 0.82s | 1.52s | 127 ch/s |
+| mlx-lm Qwen3.5-4B-4bit | 0.41s | 0.55s¹ | 0.82s | 357 ch/s (~2.8x) |
+
+¹ The 0.55s assumes sentence-streamed TTS; **production does not stream** —
+`speak_turn` generates the full reply, then synthesizes TTS (`pipeline.py`). So
+real felt first-audio ≈ full turn (~0.82s) + first TTS chunk ≈ ~1.0s.
+
+**The gain is decode throughput, NOT TTFT** (TTFT is flat). Extraction is ~2.6x but
+cached (one-time), so per-session felt savings ≈ 0.
+
+**Decision (frozen):** keep mlx-lm primary + **Ollama fallback (do not remove)**,
+and do NOT pursue streaming or KV-cache. 3-way independent review (Codex
+high-effort + 2 sub-agents) was unanimous STOP:
+- felt latency ~1.0s is already 33% under the 1.5s goal — diminishing returns;
+- streaming/KV-cache would touch the only manually-validated loop (a cross-thread
+  race was already fixed once) and couple to the fast-churning mlx-lm API, for a
+  ~0.1–0.3s imperceptible gain;
+- **Ollama cannot be removed anyway** — it is the `nomic-embed-text` embeddings
+  backend (`rehearse/embeddings.py`) used for coverage/practiced scoring.
+
+Revisit only if daily use *feels* sluggish — the latency tracer below now surfaces
+p50/p95 felt latency per session, so that would show up as data, not a guess.
+
 ## Side deliverable — per-turn latency instrumentation
 
 Codex's "highest-leverage" change. All three live loops now record a per-turn
