@@ -181,7 +181,8 @@ def smoke(decks: list[str], model: str) -> int:
 
 def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str, n_targets: int,
              full_duplex: bool, end_silence_ms: int, asr_model: str,
-             debug: bool, brief: bool) -> int:  # pragma: no cover - needs a microphone
+             debug: bool, brief: bool, practice_db=None,
+             no_persist: bool = False) -> int:  # pragma: no cover - needs a microphone
     import queue
 
     try:
@@ -214,13 +215,14 @@ def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str
     preroll = audio_io.RingBuffer(int(PREROLL_MS / 1000 * audio_io.ASR_SR))
     vad_mon = SileroVad() if full_duplex else None  # separate VAD for barge-in
     assembler = UtteranceAssembler(vad, endpoint, preroll)
-    stats: dict[str, PracticeStat] = {}
+    store, stats = _open_store(practice_db, no_persist)
     history: list[dict[str, str]] = []
     audio_q: queue.Queue = queue.Queue(maxsize=400)
     latency = LatencyAggregator()
     attempts = hits = 0
     practiced_keys: set[str] = set()
     perr_shown = False
+    store_err_shown = False
 
     def _cb(indata, frames, time_info, status):  # PortAudio thread
         try:
@@ -331,9 +333,17 @@ def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str
                         perr_shown = True
                     practiced_on = False
                 if practiced_on:
-                    da, dh = apply_practiced(r.practiced, len(targets), sentences,
-                                             stats, practiced_keys, time.time())
+                    now = time.time()
+                    da, dh, turn_keys = apply_practiced(r.practiced, len(targets),
+                                                        sentences, stats, practiced_keys, now)
                     attempts += da; hits += dh
+                    if store is not None and turn_keys:
+                        try:
+                            store.record_practiced(turn_keys, now)
+                        except Exception as e:  # never let a disk error kill a turn
+                            if not store_err_shown:
+                                print(f"  (practice not saved: {e}; continuing in-memory)")
+                                store_err_shown = True
                 history += [{"role": "user", "content": r.user_text},
                             {"role": "assistant", "content": r.reply_text}]
                 history = history[-12:]  # keep context short
@@ -352,6 +362,8 @@ def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str
             out_stream.stop(); out_stream.close()
         except Exception:
             pass
+        if store is not None:
+            store.close()
 
 
 def _key(sentences, target_text):
@@ -370,18 +382,46 @@ def apply_practiced(practiced, n_targets, sentences, stats, practiced_keys, now)
     All hits in one turn share `now` — the prior inline code called time.time()
     per hit, so same-turn hits could differ by microseconds. That drift never
     affected the only consumer (select_targets' last_ts ordering); one stamp per
-    turn is both cleaner and deterministic."""
+    turn is both cleaner and deterministic.
+
+    Returns (attempts_delta, hits_delta, turn_keys) — turn_keys is the per-hit key
+    list (one entry per hit, dups preserved) so a persistent store can mirror the
+    same count increments this turn applied to `stats`."""
+    turn_keys: list[str] = []
     for h in practiced:
         k = _key(sentences, h.target)
+        turn_keys.append(k)
         practiced_keys.add(k)
         st = stats.setdefault(k, PracticeStat())
         st.count += 1
         st.last_ts = now
-    return n_targets, len(practiced)
+    return n_targets, len(practiced), turn_keys
+
+
+def _open_store(practice_db, no_persist):
+    """Open the spaced-rep store and return (store, stats). On --no-persist OR any
+    failure (corrupt/locked/permission), return (None, {}) so the loop runs purely
+    in-memory exactly as v1 did — persistence must never block practising."""
+    if no_persist:
+        return None, {}
+    store = None
+    try:
+        from rehearse.practice_store import PracticeStore
+        store = PracticeStore(practice_db)
+        if store.recovered_from is not None:
+            print(f"  (previous practice DB was unreadable; quarantined to "
+                  f"{store.recovered_from.name}, starting fresh)")
+        return store, store.load_stats()
+    except Exception as e:
+        if store is not None:  # opened but load_stats() failed -> don't leak the connection
+            store.close()
+        print(f"  (practice persistence off: {e})")
+        return None, {}
 
 
 def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: str, n_targets: int,
-               asr_model: str, debug: bool, brief: bool) -> int:  # pragma: no cover - needs a microphone
+               asr_model: str, debug: bool, brief: bool, practice_db=None,
+               no_persist: bool = False) -> int:  # pragma: no cover - needs a microphone
     """Manual turns: you press Enter to start, speak as long as you want (pause to
     think freely — no VAD time pressure), press Enter to send. Best for a thinking
     non-native speaker. Quit with 's'+Enter or Ctrl-C."""
@@ -413,10 +453,11 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
 
     out_stream = sd.OutputStream(samplerate=out_sr, channels=1, dtype="float32")
     out_stream.start()
-    stats: dict[str, PracticeStat] = {}
+    store, stats = _open_store(practice_db, no_persist)
     history: list[dict[str, str]] = []
     attempts = hits = 0
     pkeys: set[str] = set()
+    store_err_shown = False
     latency = LatencyAggregator()
     print("\nManual turns: Enter to speak, Enter again to send. Pause to think freely. "
           "Say or type 's'+Enter to quit.\n")
@@ -453,9 +494,17 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
                     _save_debug(debug_dir, utterance, r.user_text, r.reply_text,
                                 f"asr={r.asr_s:.2f}s tts={r.tts_s:.2f}s")
                 if practiced_on:
-                    da, dh = apply_practiced(r.practiced, len(targets), sentences,
-                                             stats, pkeys, time.time())
+                    now = time.time()
+                    da, dh, turn_keys = apply_practiced(r.practiced, len(targets),
+                                                        sentences, stats, pkeys, now)
                     attempts += da; hits += dh
+                    if store is not None and turn_keys:
+                        try:
+                            store.record_practiced(turn_keys, now)
+                        except Exception as e:
+                            if not store_err_shown:
+                                print(f"  (practice not saved: {e}; continuing in-memory)")
+                                store_err_shown = True
                 history += [{"role": "user", "content": r.user_text},
                             {"role": "assistant", "content": r.reply_text}]
                 history = history[-12:]
@@ -474,6 +523,8 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
             out_stream.stop(); out_stream.close()
         except Exception:
             pass
+        if store is not None:
+            store.close()
     print("\nBye! Keep practicing.")
     if practiced_on and attempts:
         print(f"practiced: {hits} hits / {attempts} target-exposures, {len(pkeys)} distinct")
@@ -759,6 +810,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="run health checks + TTS->ASR round-trip, then exit (no mic)")
     ap.add_argument("--menu", action="store_true",
                     help="interactive launcher menu (used by the `lv` alias)")
+    ap.add_argument("--practice-db", default=None,
+                    help="SQLite file for cross-session spaced-rep stats "
+                         "(default: ~/.local/share/rehearse/practice.db)")
+    ap.add_argument("--no-persist", action="store_true",
+                    help="don't load/save practice history — in-memory only (v1 behavior)")
     args = ap.parse_args(argv)
 
     if args.menu:
@@ -766,7 +822,8 @@ def main(argv: list[str] | None = None) -> int:
         # ignoring a mode flag the user clearly meant (no silent drift).
         if (args.smoke or args.manual_turns or args.brief or args.full_duplex
                 or args.content != "english" or args.path or args.decks
-                or args.coach_backend != "auto" or args.extract_backend != "auto"):
+                or args.coach_backend != "auto" or args.extract_backend != "auto"
+                or args.no_persist or args.practice_db):
             print("--menu is a standalone launcher — don't combine it with other "
                   "mode flags (pick the mode inside the menu).", file=sys.stderr)
             return 2
@@ -795,9 +852,11 @@ def main(argv: list[str] | None = None) -> int:
         return smoke(decks, DEFAULT_MODEL)
     if args.manual_turns:
         return run_manual(decks, args.coach_backend, args.model, args.voice, args.n_targets,
-                          args.asr_model, args.debug, args.brief)
+                          args.asr_model, args.debug, args.brief,
+                          practice_db=args.practice_db, no_persist=args.no_persist)
     return run_loop(decks, args.coach_backend, args.model, args.voice, args.n_targets,
-                    args.full_duplex, args.end_silence_ms, args.asr_model, args.debug, args.brief)
+                    args.full_duplex, args.end_silence_ms, args.asr_model, args.debug, args.brief,
+                    practice_db=args.practice_db, no_persist=args.no_persist)
 
 
 if __name__ == "__main__":
