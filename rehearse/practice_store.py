@@ -67,6 +67,9 @@ class PracticeStore:
 
     # --- schema ----------------------------------------------------------
     def _migrate(self) -> None:
+        # Ensure the FULL current schema exists, idempotently and regardless of
+        # user_version — so a DB stamped v2 but missing v2 objects (partial/aborted
+        # migration, hand-edited file) is repaired here, not left to crash load_stats.
         ver = self._conn.execute("PRAGMA user_version").fetchone()[0]
         self._conn.execute(  # v1 base table
             "CREATE TABLE IF NOT EXISTS sentence_stat ("
@@ -74,22 +77,23 @@ class PracticeStore:
             "  count INTEGER NOT NULL DEFAULT 0,"
             "  last_ts REAL NOT NULL DEFAULT 0)"
         )
-        if ver < 2:  # v2: T-P2-2b shadow columns + event log (additive, data-preserving)
-            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(sentence_stat)")}
-            if "unaided_count" not in cols:
-                self._conn.execute("ALTER TABLE sentence_stat ADD COLUMN "
-                                   "unaided_count INTEGER NOT NULL DEFAULT 0")
-            if "unaided_last_ts" not in cols:
-                self._conn.execute("ALTER TABLE sentence_stat ADD COLUMN "
-                                   "unaided_last_ts REAL NOT NULL DEFAULT 0")
-            self._conn.execute(
-                "CREATE TABLE IF NOT EXISTS practice_event ("
-                "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                "  ts REAL NOT NULL,"
-                "  key TEXT NOT NULL,"
-                "  kind TEXT NOT NULL,"        # 'unaided' (room for 'prompted' later)
-                "  similarity REAL)"
-            )
+        # v2: T-P2-2b shadow columns + event log (additive, data-preserving). Guarded
+        # by column existence, NOT by user_version, so it self-repairs.
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(sentence_stat)")}
+        if "unaided_count" not in cols:
+            self._conn.execute("ALTER TABLE sentence_stat ADD COLUMN "
+                               "unaided_count INTEGER NOT NULL DEFAULT 0")
+        if "unaided_last_ts" not in cols:
+            self._conn.execute("ALTER TABLE sentence_stat ADD COLUMN "
+                               "unaided_last_ts REAL NOT NULL DEFAULT 0")
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS practice_event ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  ts REAL NOT NULL,"
+            "  key TEXT NOT NULL,"
+            "  kind TEXT NOT NULL,"        # 'unaided' (room for 'prompted' later)
+            "  similarity REAL)"
+        )
         if ver < SCHEMA_VERSION:
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._conn.commit()

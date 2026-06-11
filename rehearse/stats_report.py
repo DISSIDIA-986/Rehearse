@@ -98,5 +98,13 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _cli() -> None:
+    """Console-script entry; run_cli funnels every exit through fast_exit to skip
+    the sentencepiece/abseil finalize SIGBUS (see rehearse._exit). main() stays
+    pure for tests."""
+    from rehearse._exit import run_cli
+    run_cli(main)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _cli()

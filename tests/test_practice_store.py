@@ -337,6 +337,24 @@ def test_record_unaided_accumulates(tmp_path):
         assert len(s.unaided_events()) == 2
 
 
+def test_migration_repairs_v2_stamped_db_missing_objects(tmp_path):
+    # a DB stamped user_version=2 but LACKING the v2 columns/event table (partial
+    # or aborted migration) must self-repair on open, not crash load_stats
+    path = _db(tmp_path)
+    con = sqlite3.connect(str(path))
+    con.execute("CREATE TABLE sentence_stat (key TEXT PRIMARY KEY, "
+                "count INTEGER NOT NULL DEFAULT 0, last_ts REAL NOT NULL DEFAULT 0)")
+    con.execute("INSERT INTO sentence_stat VALUES ('k', 2, 5.0)")
+    con.execute("PRAGMA user_version = 2")  # stamped v2 but v2 objects absent
+    con.commit(); con.close()
+    with PracticeStore(path) as s:
+        st = s.load_stats()["k"]  # must not raise on missing unaided_count
+        assert st.count == 2 and st.unaided_count == 0
+        assert s.unaided_events() == []  # event table created
+        s.record_unaided("k", 0.7, now=1.0)
+        assert s.load_stats()["k"].unaided_count == 1
+
+
 def test_reopening_v2_db_is_idempotent(tmp_path):
     # an already-v2 DB must reopen cleanly: no duplicate ALTER, event table intact,
     # data + version preserved (migration runs but is a no-op past v2)

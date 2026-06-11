@@ -334,6 +334,19 @@ def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str
                         print(f"  (practiced-scoring error: {r.practiced_error}; tracking off)")
                         perr_shown = True
                     practiced_on = False
+                history += [{"role": "user", "content": r.user_text},
+                            {"role": "assistant", "content": r.reply_text}]
+                history = history[-12:]  # keep context short
+                if r.reply_audio.size:
+                    felt = time.monotonic() - t_end  # vad_end -> about to play first audio
+                    trace = TurnTrace.from_turn(r, felt)
+                    latency.add(trace)
+                    if debug_dir:
+                        print(f"  {trace.one_line()}")
+                    play(r.reply_audio)
+                # Bookkeeping AFTER playback — keep the practiced disk-write and the
+                # shadow scoring OFF the felt-latency (first-audio) path.
+                turn_keys: list[str] = []
                 if practiced_on:
                     now = time.time()
                     da, dh, turn_keys = apply_practiced(r.practiced, len(targets),
@@ -346,22 +359,10 @@ def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str
                             if not store_err_shown:
                                 print(f"  (practice not saved: {e}; continuing in-memory)")
                                 store_err_shown = True
-                history += [{"role": "user", "content": r.user_text},
-                            {"role": "assistant", "content": r.reply_text}]
-                history = history[-12:]  # keep context short
-                if r.reply_audio.size:
-                    felt = time.monotonic() - t_end  # vad_end -> about to play first audio
-                    trace = TurnTrace.from_turn(r, felt)
-                    latency.add(trace)
-                    if debug_dir:
-                        print(f"  {trace.one_line()}")
-                    play(r.reply_audio)
-                # T-P2-2b shadow: AFTER playback (off the felt-latency path).
-                # Guarded so default-off does literally zero extra per-turn work.
-                if enable_unaided:
+                if enable_unaided:  # default-off -> literally zero extra per-turn work
                     u = _shadow_unaided(enable_unaided, store, stats, sentences, targets,
                                         r.user_text, ollama_embed if practiced_on else None,
-                                        unaided_cache, time.time())
+                                        unaided_cache, time.time(), exclude_keys=turn_keys)
                     if u and debug_dir:
                         print(f"  [unaided] {u.key!r} sim={u.similarity:.2f} (shadow)")
     except KeyboardInterrupt:
@@ -408,16 +409,23 @@ def apply_practiced(practiced, n_targets, sentences, stats, practiced_keys, now)
     return n_targets, len(practiced), turn_keys
 
 
-def _shadow_unaided(enable, store, stats, sentences, targets, user_text, embed, cache, now):
+def _shadow_unaided(enable, store, stats, sentences, targets, user_text, embed, cache, now,
+                    exclude_keys=()):
     """T-P2-2b SHADOW detection — runs AFTER playback (off the felt-latency path)
     and NEVER raises into the loop. Records an unaided-production event but does
     NOT touch stats/scheduling, so a false positive cannot poison select_targets.
-    Off unless --enable-unaided. Returns the hit (for optional debug) or None."""
+    Off unless --enable-unaided. Returns the hit (for optional debug) or None.
+
+    `exclude_keys` are this turn's PROMPTED-hit keys (from apply_practiced) — they
+    are excluded alongside the active targets so a sentence already credited as a
+    prompted hit this turn can't also be double-counted as unaided, and so a
+    text-variant key can't leak back in."""
     if not (enable and store is not None and user_text and embed is not None):
         return None
     try:
         from rehearse.unaided import detect_unaided, select_candidates
-        cands = select_candidates(stats, sentences, {t.key for t in targets})
+        active = {t.key for t in targets} | set(exclude_keys)
+        cands = select_candidates(stats, sentences, active)
         hit = detect_unaided(user_text, cands, embed, cache=cache)
         if hit:
             store.record_unaided(hit.key, hit.similarity, now)
@@ -523,6 +531,19 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
                 if debug_dir:
                     _save_debug(debug_dir, utterance, r.user_text, r.reply_text,
                                 f"asr={r.asr_s:.2f}s tts={r.tts_s:.2f}s")
+                history += [{"role": "user", "content": r.user_text},
+                            {"role": "assistant", "content": r.reply_text}]
+                history = history[-12:]
+                if r.reply_audio.size:
+                    felt = time.monotonic() - t_end  # send -> about to play first audio
+                    trace = TurnTrace.from_turn(r, felt)
+                    latency.add(trace)
+                    if debug_dir:
+                        print(f"     {trace.one_line()}")
+                    out_stream.write(audio_io.resample(r.reply_audio, tts.sr, out_sr))
+                # Bookkeeping AFTER playback — keep the practiced disk-write and the
+                # shadow scoring OFF the felt-latency (first-audio) path.
+                turn_keys: list[str] = []
                 if practiced_on:
                     now = time.time()
                     da, dh, turn_keys = apply_practiced(r.practiced, len(targets),
@@ -535,22 +556,10 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
                             if not store_err_shown:
                                 print(f"  (practice not saved: {e}; continuing in-memory)")
                                 store_err_shown = True
-                history += [{"role": "user", "content": r.user_text},
-                            {"role": "assistant", "content": r.reply_text}]
-                history = history[-12:]
-                if r.reply_audio.size:
-                    felt = time.monotonic() - t_end  # send -> about to play first audio
-                    trace = TurnTrace.from_turn(r, felt)
-                    latency.add(trace)
-                    if debug_dir:
-                        print(f"     {trace.one_line()}")
-                    out_stream.write(audio_io.resample(r.reply_audio, tts.sr, out_sr))
-                # T-P2-2b shadow: AFTER playback (off the felt-latency path).
-                # Guarded so default-off does literally zero extra per-turn work.
-                if enable_unaided:
+                if enable_unaided:  # default-off -> literally zero extra per-turn work
                     u = _shadow_unaided(enable_unaided, store, stats, sentences, targets,
                                         r.user_text, ollama_embed if practiced_on else None,
-                                        unaided_cache, time.time())
+                                        unaided_cache, time.time(), exclude_keys=turn_keys)
                     if u and debug_dir:
                         print(f"     [unaided] {u.key!r} sim={u.similarity:.2f} (shadow)")
                 print()
@@ -903,5 +912,14 @@ def main(argv: list[str] | None = None) -> int:
                     enable_unaided=args.enable_unaided)
 
 
+def _cli() -> None:
+    """Console-script / `python -m` entry. Routes every exit path through the
+    fast_exit funnel to skip the sentencepiece/abseil SIGBUS at interpreter
+    finalization (see rehearse._exit). main() stays pure so tests can call it
+    without the test process being os._exit'd."""
+    from rehearse._exit import run_cli
+    run_cli(main)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _cli()

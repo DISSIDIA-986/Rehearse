@@ -6,9 +6,11 @@ requires-python = ">=3.11,<3.14"  # kokoro-onnx / model deps not yet on 3.14
 dependencies = ["numpy>=1.26"]
 
 [project.scripts]
-rehearse = "rehearse.main_loop:main"
-rehearse-bench-asr = "rehearse.bench_asr:main"  # ASR eval tool (not the shipped pipeline)
-rehearse-stats = "rehearse.stats_report:main"  # offline cross-session progress + unaided audit
+# entry points route through _cli (fast_exit) to dodge the sentencepiece/abseil
+# SIGBUS at interpreter finalization; main() stays pure for tests. See rehearse/_exit.py
+rehearse = "rehearse.main_loop:_cli"
+rehearse-bench-asr = "rehearse.bench_asr:_cli"  # ASR eval tool (not the shipped pipeline)
+rehearse-stats = "rehearse.stats_report:_cli"  # offline cross-session progress + unaided audit
 
 [project.optional-dependencies]
 # Audio runtime (no torch) — install with: uv sync --extra audio
