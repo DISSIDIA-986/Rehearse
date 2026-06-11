@@ -7,6 +7,30 @@ None-skipping (empty-transcript turns must not drag the felt summary to zero).""
 from __future__ import annotations
 
 from rehearse.latency import LatencyAggregator, TurnTrace, _percentile
+from rehearse.pipeline import SpokenTurn, TurnResult
+
+
+# ---- TurnTrace.from_turn (field mapping shared by every loop mode) -----------
+
+def _spoken(**kw):
+    base = dict(user_text="u", reply_text="r", reply_chunks=["r"],
+                reply_audio=__import__("numpy").zeros(0))
+    return SpokenTurn(**{**base, **kw})
+
+
+def test_from_turn_maps_spoken_fields():
+    st = _spoken(asr_s=0.3, ttft_s=0.6, tts_ttfa_s=0.25, tts_s=0.9)
+    t = TurnTrace.from_turn(st, felt_s=1.4)
+    assert (t.asr_s, t.ttft_s, t.tts_ttfa_s, t.tts_total_s, t.felt_s) == \
+        (0.3, 0.6, 0.25, 0.9, 1.4)
+
+
+def test_from_turn_maps_turnresult_and_defaults_felt():
+    r = TurnResult(user_text="u", reply_text="r", reply_chunks=["r"],
+                   reply_audio=__import__("numpy").zeros(0),
+                   asr_s=0.2, ttft_s=None, tts_ttfa_s=0.1, tts_s=0.5)
+    t = TurnTrace.from_turn(r)  # felt_s omitted -> None (empty/aborted turn)
+    assert t.tts_total_s == 0.5 and t.ttft_s is None and t.felt_s is None
 
 
 # ---- _percentile edge cases -------------------------------------------------

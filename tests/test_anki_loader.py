@@ -96,6 +96,20 @@ def test_sentence_key_normalizes():
     assert Sentence("Hello, World! ", None, None, "d", 0).key == "hello, world"
 
 
+# --- parse_deck: friendly errors on bad input -----------------------------
+
+def test_parse_deck_malformed_xml_raises_friendly(tmp_path):
+    bad = tmp_path / "broken.xml"
+    bad.write_text("<deck><cards><card>unterminated")
+    with pytest.raises(RuntimeError, match="not valid XML"):
+        parse_deck(bad)
+
+
+def test_parse_deck_missing_file_raises_friendly(tmp_path):
+    with pytest.raises(RuntimeError, match="cannot read deck"):
+        parse_deck(tmp_path / "does_not_exist.xml")
+
+
 # --- real-data smoke test (private decks; skipped if absent) --------------
 
 DATA = Path(__file__).parent.parent / "data"

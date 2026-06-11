@@ -347,9 +347,7 @@ def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str
                 history = history[-12:]  # keep context short
                 if r.reply_audio.size:
                     felt = time.monotonic() - t_end  # vad_end -> about to play first audio
-                    trace = TurnTrace(asr_s=r.asr_s, ttft_s=r.ttft_s,
-                                      tts_ttfa_s=r.tts_ttfa_s, tts_total_s=r.tts_s,
-                                      felt_s=felt)
+                    trace = TurnTrace.from_turn(r, felt)
                     latency.add(trace)
                     if debug_dir:
                         print(f"  {trace.one_line()}")
@@ -465,9 +463,7 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
                 history = history[-12:]
                 if r.reply_audio.size:
                     felt = time.monotonic() - t_end  # send -> about to play first audio
-                    trace = TurnTrace(asr_s=r.asr_s, ttft_s=r.ttft_s,
-                                      tts_ttfa_s=r.tts_ttfa_s, tts_total_s=r.tts_s,
-                                      felt_s=felt)
+                    trace = TurnTrace.from_turn(r, felt)
                     latency.add(trace)
                     if debug_dir:
                         print(f"     {trace.one_line()}")
@@ -663,9 +659,7 @@ def run_recall(path: str, coach_backend: str, model: str | None,
                 history = history[-12:]
                 if st.reply_audio.size:
                     felt = time.monotonic() - t_end  # answer-end -> about to play first audio
-                    trace = TurnTrace(asr_s=st.asr_s, ttft_s=st.ttft_s,
-                                      tts_ttfa_s=st.tts_ttfa_s, tts_total_s=st.tts_s,
-                                      felt_s=felt)
+                    trace = TurnTrace.from_turn(st, felt)
                     latency.add(trace)
                     if debug_dir:
                         print(f"     {trace.one_line()}")
