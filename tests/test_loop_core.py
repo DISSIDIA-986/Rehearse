@@ -1,7 +1,15 @@
+import queue
+
 import numpy as np
 
+from rehearse import audio_io
 from rehearse.audio_io import RingBuffer
-from rehearse.loop_core import UtteranceAssembler, is_stop
+from rehearse.loop_core import (
+    UtteranceAssembler,
+    drain_utterance,
+    io_rates,
+    is_stop,
+)
 from rehearse.vad import EndpointConfig, EndpointDetector
 
 
@@ -10,6 +18,72 @@ def test_is_stop():
         assert is_stop(t), t
     for t in ["I have no interest in it", "let's keep going", "stopwatch"]:
         assert not is_stop(t), t
+
+
+# --- io_rates: device-rate resolution with independent fallback --------------
+
+class _FakeSd:
+    """Scriptable sounddevice stand-in. rates maps kind -> samplerate or an
+    Exception instance to raise."""
+
+    def __init__(self, rates):
+        self.rates = rates
+
+    def query_devices(self, kind):
+        r = self.rates[kind]
+        if isinstance(r, Exception):
+            raise r
+        return {"default_samplerate": r}
+
+
+def test_io_rates_reads_both_directions():
+    in_sr, out_sr, block = io_rates(_FakeSd({"input": 48000, "output": 44100}))
+    assert (in_sr, out_sr) == (48000, 44100)
+    assert block == max(1, round(512 * 48000 / audio_io.ASR_SR))  # 1536
+
+
+def test_io_rates_output_failure_keeps_good_input():
+    # independent fallback: a broken output query must NOT discard the input rate
+    in_sr, out_sr, _ = io_rates(_FakeSd({"input": 32000, "output": RuntimeError("x")}))
+    assert in_sr == 32000
+    assert out_sr == audio_io.DEFAULT_DEVICE_SR
+
+
+def test_io_rates_input_failure_falls_back_only_input():
+    in_sr, out_sr, _ = io_rates(_FakeSd({"input": KeyError("k"), "output": 44100}))
+    assert in_sr == audio_io.DEFAULT_DEVICE_SR
+    assert out_sr == 44100
+
+
+def test_io_rates_both_fail_use_defaults():
+    in_sr, out_sr, block = io_rates(
+        _FakeSd({"input": OSError(), "output": OSError()}))
+    assert in_sr == out_sr == audio_io.DEFAULT_DEVICE_SR
+    assert block >= 1
+
+
+# --- drain_utterance: queue -> single-resample utterance ---------------------
+
+def test_drain_utterance_empty_is_none():
+    assert drain_utterance(queue.Queue(), 16000) is None
+
+
+def test_drain_utterance_concatenates_in_order():
+    q: queue.Queue = queue.Queue()
+    q.put(np.array([1.0, 2.0], dtype=np.float32))
+    q.put(np.array([3.0], dtype=np.float32))
+    out = drain_utterance(q, 16000)  # in==out rate -> no resample, exact concat
+    assert np.array_equal(out, np.array([1.0, 2.0, 3.0], dtype=np.float32))
+    assert q.empty()  # fully drained
+
+
+def test_drain_utterance_resamples_once_to_16k():
+    import pytest
+    pytest.importorskip("soxr")  # downsample path needs the audio extra
+    q: queue.Queue = queue.Queue()
+    q.put(np.zeros(4800, dtype=np.float32))  # 0.1s @ 48k
+    out = drain_utterance(q, 48000)
+    assert abs(len(out) - 1600) <= 1  # ~0.1s @ 16k
 
 
 class _FakeVad:
