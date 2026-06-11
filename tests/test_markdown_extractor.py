@@ -18,6 +18,7 @@ from rehearse.markdown_extractor import (
     _parse_json_obj,
     chunk_markdown,
     extract_items,
+    extract_items_fast,
     load_markdown,
 )
 

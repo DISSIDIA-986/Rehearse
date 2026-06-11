@@ -211,6 +211,26 @@ def extract_items(md_text: str, *, model: str = EXTRACT_MODEL, chat_fn=chat,
     return merged
 
 
+def extract_items_fast(md_text: str) -> list[PracticeItem]:
+    """No-LLM extraction: just the heading+bullet+prose regex parser, instant. Good
+    when the doc is well-structured (resume, prep notes, glossary, bullet lists) —
+    `## Heading` becomes the prompt, bullets/lines under it the expected_points.
+    Use `--extract-backend fast`. Falls down on dense prose where an LLM would shine."""
+    items: list[PracticeItem] = []
+    for ci, chunk in enumerate(chunk_markdown(md_text)):
+        items.extend(_fallback_items(chunk, f"c{ci}"))
+    # same substance + dedup filter as the LLM path
+    seen: set[str] = set()
+    merged: list[PracticeItem] = []
+    for it in items:
+        pts = [p for p in it.expected_points if has_substance(p)]
+        if pts and it.key not in seen:
+            seen.add(it.key)
+            it.expected_points = pts
+            merged.append(it)
+    return merged
+
+
 _FENCED_JSON = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL | re.IGNORECASE)
 
 
@@ -259,7 +279,10 @@ def resolve_extract_chat(backend: str = "auto", model: str | None = None):
     """Pick the extraction backend ONCE, up front (never mid-document): returns
     (chat_fn, model_id, backend_name). 'auto' uses MLX if importable (~2.6x on Apple
     Silicon), else Ollama. If MLX is requested but unavailable, fall back to Ollama
-    for the whole run (document-level, so a doc never mixes backends in one cache entry)."""
+    for the whole run (document-level, so a doc never mixes backends in one cache entry).
+    'fast' is handled directly in load_markdown (no LLM, no chat_fn), not here."""
+    if backend == "fast":  # caller should branch to extract_items_fast before resolving
+        raise ValueError("backend='fast' has no chat_fn; load_markdown handles it directly")
     if backend in ("auto", "mlx"):
         from rehearse.mlx_llm import MLX_EXTRACT_MODEL, mlx_available, mlx_chat  # lazy
         if mlx_available():
@@ -279,7 +302,9 @@ def load_markdown(path, *, backend: str = "auto", model: str | None = None, chat
     path = Path(path)
     text = path.read_text(encoding="utf-8")
     cache_dir = Path(cache_dir)
-    if chat_fn is None:
+    if backend == "fast":  # no LLM, instant heading+bullet parser; chat_fn ignored
+        backend_name, model = "fast", "-"
+    elif chat_fn is None:
         chat_fn, model, backend_name = resolve_extract_chat(backend, model)
     else:
         backend_name = "ollama" if backend == "auto" else backend
@@ -289,8 +314,11 @@ def load_markdown(path, *, backend: str = "auto", model: str | None = None, chat
     if cache.exists():
         items = [PracticeItem(**d) for d in json.loads(cache.read_text(encoding="utf-8"))]
     else:
-        items = extract_items(text, model=model, chat_fn=chat_fn, on_progress=on_progress)
-        if items:  # never cache an empty result from a transient LLM/JSON failure
+        if backend_name == "fast":
+            items = extract_items_fast(text)
+        else:
+            items = extract_items(text, model=model, chat_fn=chat_fn, on_progress=on_progress)
+        if items:  # never cache an empty result (transient LLM/JSON failure, or empty doc)
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps([asdict(it) for it in items], ensure_ascii=False),
                              encoding="utf-8")
