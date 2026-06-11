@@ -273,6 +273,90 @@ def test_versionless_db_with_data_is_upgraded_not_wiped(tmp_path):
         con.close()
 
 
+# --- v2: unaided shadow signal (T-P2-2b) ----------------------------------
+
+def test_migration_v1_to_v2_adds_columns_preserves_data(tmp_path):
+    # a real v1 DB (base table, user_version=1, has data) must upgrade in place
+    path = _db(tmp_path)
+    con = sqlite3.connect(str(path))
+    con.execute("CREATE TABLE sentence_stat (key TEXT PRIMARY KEY, "
+                "count INTEGER NOT NULL DEFAULT 0, last_ts REAL NOT NULL DEFAULT 0)")
+    con.execute("INSERT INTO sentence_stat VALUES ('old', 4, 9.0)")
+    con.execute("PRAGMA user_version = 1")
+    con.commit(); con.close()
+    with PracticeStore(path) as s:
+        st = s.load_stats()["old"]
+        assert (st.count, st.last_ts, st.unaided_count) == (4, 9.0, 0)  # preserved + defaulted
+        s.record_unaided("old", 0.7, now=10.0)
+        assert s.load_stats()["old"].unaided_count == 1  # v2 columns usable
+    con = sqlite3.connect(str(path))
+    try:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 2
+        cols = {r[1] for r in con.execute("PRAGMA table_info(sentence_stat)")}
+        assert {"unaided_count", "unaided_last_ts"} <= cols
+    finally:
+        con.close()
+
+
+def test_record_unaided_increments_and_logs_without_touching_schedule(tmp_path):
+    with PracticeStore(_db(tmp_path)) as s:
+        s.record_practiced(["k"], now=1.0)  # count=1, last_ts=1.0
+        assert s.record_unaided("k", 0.83, now=5.0) is True
+        st = s.load_stats()["k"]
+        assert st.unaided_count == 1
+        # CRITICAL: scheduling fields are untouched -> can't poison select_targets
+        assert st.count == 1 and st.last_ts == 1.0
+        assert s.unaided_events() == [(5.0, "k", 0.83)]
+
+
+def test_record_unaided_blank_key_is_noop(tmp_path):
+    with PracticeStore(_db(tmp_path)) as s:
+        assert s.record_unaided("   ", 0.9, now=1.0) is False
+        assert s.unaided_events() == []
+
+
+def test_record_unaided_unknown_key_creates_row(tmp_path):
+    # defensive: even if the key has no prior row, record (count stays 0)
+    with PracticeStore(_db(tmp_path)) as s:
+        s.record_unaided("fresh", 0.7, now=2.0)
+        st = s.load_stats()["fresh"]
+        assert st.unaided_count == 1 and st.count == 0
+
+
+def test_load_stats_defaults_unaided_to_zero(tmp_path):
+    with PracticeStore(_db(tmp_path)) as s:
+        s.record_practiced(["k"], now=1.0)
+        assert s.load_stats()["k"].unaided_count == 0
+
+
+def test_record_unaided_accumulates(tmp_path):
+    with PracticeStore(_db(tmp_path)) as s:
+        s.record_unaided("k", 0.7, now=1.0)
+        s.record_unaided("k", 0.8, now=2.0)
+        assert s.load_stats()["k"].unaided_count == 2
+        assert len(s.unaided_events()) == 2
+
+
+def test_reopening_v2_db_is_idempotent(tmp_path):
+    # an already-v2 DB must reopen cleanly: no duplicate ALTER, event table intact,
+    # data + version preserved (migration runs but is a no-op past v2)
+    path = _db(tmp_path)
+    with PracticeStore(path) as s:
+        s.record_practiced(["k"], now=1.0)
+        s.record_unaided("k", 0.9, now=2.0)
+    with PracticeStore(path) as s:  # reopen — must not raise or lose data
+        st = s.load_stats()["k"]
+        assert st.count == 1 and st.unaided_count == 1
+        assert len(s.unaided_events()) == 1
+        s.record_unaided("k", 0.8, now=3.0)
+        assert s.load_stats()["k"].unaided_count == 2
+    con = sqlite3.connect(str(path))
+    try:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    finally:
+        con.close()
+
+
 # --- lifecycle ------------------------------------------------------------
 
 def test_close_is_idempotent(tmp_path):

@@ -2,7 +2,7 @@
 otherwise uncovered) English loops in main_loop.py."""
 
 from rehearse.anki_loader import Sentence
-from rehearse.main_loop import _open_store, apply_practiced
+from rehearse.main_loop import _open_store, _shadow_unaided, apply_practiced
 from rehearse.practice_store import PracticeStore
 from rehearse.practiced_scorer import PracticeHit
 from rehearse.session_seeder import PracticeStat, select_targets
@@ -108,3 +108,76 @@ def test_turn_persistence_sequence_survives_reload(tmp_path):
         assert select_targets(sentences, stats2, n=1)[0].key == other.key
     finally:
         store2.close()
+
+
+# --- _shadow_unaided: T-P2-2b shadow wiring (off-path, fail-safe) ----------
+
+def _ones_embed(texts):
+    return [[1.0, 0.0] for _ in texts]  # all-identical vecs -> cosine 1.0 -> hit
+
+
+def test_shadow_unaided_off_by_default_records_nothing(tmp_path):
+    store, _ = _open_store(tmp_path / "p.db", no_persist=False)
+    try:
+        s = _sent("Let's grab a coffee.")
+        stats = {s.key: PracticeStat(count=1)}
+        out = _shadow_unaided(False, store, stats, [s], [], "coffee", _ones_embed, {}, now=1.0)
+        assert out is None
+        assert store.unaided_events() == []  # disabled -> nothing logged
+    finally:
+        store.close()
+
+
+def test_shadow_unaided_records_event_when_enabled(tmp_path):
+    store, _ = _open_store(tmp_path / "p.db", no_persist=False)
+    try:
+        s = _sent("Let's grab a coffee.")
+        store.record_practiced([s.key], now=0.5)  # persist count=1 (schedule baseline)
+        stats = {s.key: PracticeStat(count=1, last_ts=0.5)}  # count>0 -> eligible candidate
+        out = _shadow_unaided(True, store, stats, [s], [], "coffee time",
+                              _ones_embed, {}, now=3.0)
+        assert out is not None and out.key == s.key
+        ev = store.unaided_events()
+        assert len(ev) == 1 and ev[0][1] == s.key
+        loaded = store.load_stats()[s.key]
+        assert loaded.unaided_count == 1            # shadow signal recorded
+        assert loaded.count == 1 and loaded.last_ts == 0.5  # schedule UNTOUCHED
+    finally:
+        store.close()
+
+
+def test_shadow_unaided_excludes_active_targets(tmp_path):
+    store, _ = _open_store(tmp_path / "p.db", no_persist=False)
+    try:
+        s = _sent("Let's grab a coffee.")
+        stats = {s.key: PracticeStat(count=1)}
+        # s IS this turn's active target -> never an "unaided" hit even at sim 1.0
+        out = _shadow_unaided(True, store, stats, [s], [s], "coffee", _ones_embed, {}, now=1.0)
+        assert out is None
+        assert store.unaided_events() == []
+    finally:
+        store.close()
+
+
+def test_shadow_unaided_never_raises_on_embed_error(tmp_path):
+    store, _ = _open_store(tmp_path / "p.db", no_persist=False)
+    try:
+        s = _sent("Alpha.")
+        stats = {s.key: PracticeStat(count=1)}
+
+        def boom(texts):
+            raise RuntimeError("embed down")
+
+        out = _shadow_unaided(True, store, stats, [s], [], "alpha", boom, {}, now=1.0)
+        assert out is None  # swallowed; a shadow signal never breaks a turn
+        assert store.unaided_events() == []
+    finally:
+        store.close()
+
+
+def test_shadow_unaided_no_store_or_no_embed_is_none():
+    s = _sent("Alpha.")
+    stats = {s.key: PracticeStat(count=1)}
+    assert _shadow_unaided(True, None, stats, [s], [], "a", _ones_embed, {}, now=1.0) is None
+    store_stats = {s.key: PracticeStat(count=1)}
+    assert _shadow_unaided(True, object(), store_stats, [s], [], "a", None, {}, now=1.0) is None

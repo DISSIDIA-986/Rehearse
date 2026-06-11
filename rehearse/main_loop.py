@@ -182,7 +182,8 @@ def smoke(decks: list[str], model: str) -> int:
 def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str, n_targets: int,
              full_duplex: bool, end_silence_ms: int, asr_model: str,
              debug: bool, brief: bool, practice_db=None,
-             no_persist: bool = False) -> int:  # pragma: no cover - needs a microphone
+             no_persist: bool = False,
+             enable_unaided: bool = False) -> int:  # pragma: no cover - needs a microphone
     import queue
 
     try:
@@ -216,6 +217,7 @@ def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str
     vad_mon = SileroVad() if full_duplex else None  # separate VAD for barge-in
     assembler = UtteranceAssembler(vad, endpoint, preroll)
     store, stats = _open_store(practice_db, no_persist)
+    unaided_cache: dict = {}  # per-session candidate-embedding cache (T-P2-2b shadow)
     history: list[dict[str, str]] = []
     audio_q: queue.Queue = queue.Queue(maxsize=400)
     latency = LatencyAggregator()
@@ -354,6 +356,14 @@ def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str
                     if debug_dir:
                         print(f"  {trace.one_line()}")
                     play(r.reply_audio)
+                # T-P2-2b shadow: AFTER playback (off the felt-latency path).
+                # Guarded so default-off does literally zero extra per-turn work.
+                if enable_unaided:
+                    u = _shadow_unaided(enable_unaided, store, stats, sentences, targets,
+                                        r.user_text, ollama_embed if practiced_on else None,
+                                        unaided_cache, time.time())
+                    if u and debug_dir:
+                        print(f"  [unaided] {u.key!r} sim={u.similarity:.2f} (shadow)")
     except KeyboardInterrupt:
         print("\nBye! Keep practicing.")
         _summary(); return 0
@@ -398,6 +408,24 @@ def apply_practiced(practiced, n_targets, sentences, stats, practiced_keys, now)
     return n_targets, len(practiced), turn_keys
 
 
+def _shadow_unaided(enable, store, stats, sentences, targets, user_text, embed, cache, now):
+    """T-P2-2b SHADOW detection — runs AFTER playback (off the felt-latency path)
+    and NEVER raises into the loop. Records an unaided-production event but does
+    NOT touch stats/scheduling, so a false positive cannot poison select_targets.
+    Off unless --enable-unaided. Returns the hit (for optional debug) or None."""
+    if not (enable and store is not None and user_text and embed is not None):
+        return None
+    try:
+        from rehearse.unaided import detect_unaided, select_candidates
+        cands = select_candidates(stats, sentences, {t.key for t in targets})
+        hit = detect_unaided(user_text, cands, embed, cache=cache)
+        if hit:
+            store.record_unaided(hit.key, hit.similarity, now)
+        return hit
+    except Exception:
+        return None  # a shadow measurement must never disrupt a live turn
+
+
 def _open_store(practice_db, no_persist):
     """Open the spaced-rep store and return (store, stats). On --no-persist OR any
     failure (corrupt/locked/permission), return (None, {}) so the loop runs purely
@@ -421,7 +449,8 @@ def _open_store(practice_db, no_persist):
 
 def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: str, n_targets: int,
                asr_model: str, debug: bool, brief: bool, practice_db=None,
-               no_persist: bool = False) -> int:  # pragma: no cover - needs a microphone
+               no_persist: bool = False,
+               enable_unaided: bool = False) -> int:  # pragma: no cover - needs a microphone
     """Manual turns: you press Enter to start, speak as long as you want (pause to
     think freely — no VAD time pressure), press Enter to send. Best for a thinking
     non-native speaker. Quit with 's'+Enter or Ctrl-C."""
@@ -454,6 +483,7 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
     out_stream = sd.OutputStream(samplerate=out_sr, channels=1, dtype="float32")
     out_stream.start()
     store, stats = _open_store(practice_db, no_persist)
+    unaided_cache: dict = {}  # per-session candidate-embedding cache (T-P2-2b shadow)
     history: list[dict[str, str]] = []
     attempts = hits = 0
     pkeys: set[str] = set()
@@ -515,6 +545,14 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
                     if debug_dir:
                         print(f"     {trace.one_line()}")
                     out_stream.write(audio_io.resample(r.reply_audio, tts.sr, out_sr))
+                # T-P2-2b shadow: AFTER playback (off the felt-latency path).
+                # Guarded so default-off does literally zero extra per-turn work.
+                if enable_unaided:
+                    u = _shadow_unaided(enable_unaided, store, stats, sentences, targets,
+                                        r.user_text, ollama_embed if practiced_on else None,
+                                        unaided_cache, time.time())
+                    if u and debug_dir:
+                        print(f"     [unaided] {u.key!r} sim={u.similarity:.2f} (shadow)")
                 print()
     except (KeyboardInterrupt, EOFError):
         pass
@@ -815,6 +853,10 @@ def main(argv: list[str] | None = None) -> int:
                          "(default: ~/.local/share/rehearse/practice.db)")
     ap.add_argument("--no-persist", action="store_true",
                     help="don't load/save practice history — in-memory only (v1 behavior)")
+    ap.add_argument("--enable-unaided", action="store_true",
+                    help="(experimental, shadow) log 'unaided production' — sentences you "
+                         "produce spontaneously, off the steered targets — for later "
+                         "calibration. Does NOT affect scheduling. Off by default.")
     args = ap.parse_args(argv)
 
     if args.menu:
@@ -823,7 +865,7 @@ def main(argv: list[str] | None = None) -> int:
         if (args.smoke or args.manual_turns or args.brief or args.full_duplex
                 or args.content != "english" or args.path or args.decks
                 or args.coach_backend != "auto" or args.extract_backend != "auto"
-                or args.no_persist or args.practice_db):
+                or args.no_persist or args.practice_db or args.enable_unaided):
             print("--menu is a standalone launcher — don't combine it with other "
                   "mode flags (pick the mode inside the menu).", file=sys.stderr)
             return 2
@@ -853,10 +895,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.manual_turns:
         return run_manual(decks, args.coach_backend, args.model, args.voice, args.n_targets,
                           args.asr_model, args.debug, args.brief,
-                          practice_db=args.practice_db, no_persist=args.no_persist)
+                          practice_db=args.practice_db, no_persist=args.no_persist,
+                          enable_unaided=args.enable_unaided)
     return run_loop(decks, args.coach_backend, args.model, args.voice, args.n_targets,
                     args.full_duplex, args.end_silence_ms, args.asr_model, args.debug, args.brief,
-                    practice_db=args.practice_db, no_persist=args.no_persist)
+                    practice_db=args.practice_db, no_persist=args.no_persist,
+                    enable_unaided=args.enable_unaided)
 
 
 if __name__ == "__main__":

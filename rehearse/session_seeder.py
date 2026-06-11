@@ -17,6 +17,7 @@ from rehearse.anki_loader import Sentence
 class PracticeStat:
     count: int = 0
     last_ts: float = 0.0  # epoch seconds of last practice
+    unaided_count: int = 0  # T-P2-2b shadow signal — NOT used by select_targets (yet)
 
 
 def select_targets(
