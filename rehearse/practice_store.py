@@ -28,8 +28,8 @@ from pathlib import Path
 
 from rehearse.session_seeder import PracticeStat
 
-SCHEMA_VERSION = 1
-_COLUMNS = {"key", "count", "last_ts"}  # the schema load_stats/record assume
+SCHEMA_VERSION = 2  # v2: + unaided_count/unaided_last_ts + practice_event (T-P2-2b shadow)
+_COLUMNS = {"key", "count", "last_ts"}  # the BASE columns _healthy requires (v2 adds more)
 
 
 def default_db_path() -> Path:
@@ -68,24 +68,41 @@ class PracticeStore:
     # --- schema ----------------------------------------------------------
     def _migrate(self) -> None:
         ver = self._conn.execute("PRAGMA user_version").fetchone()[0]
-        self._conn.execute(
+        self._conn.execute(  # v1 base table
             "CREATE TABLE IF NOT EXISTS sentence_stat ("
             "  key TEXT PRIMARY KEY,"
             "  count INTEGER NOT NULL DEFAULT 0,"
             "  last_ts REAL NOT NULL DEFAULT 0)"
         )
-        # future additive migrations slot in here, guarded by `ver < N`.
+        if ver < 2:  # v2: T-P2-2b shadow columns + event log (additive, data-preserving)
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(sentence_stat)")}
+            if "unaided_count" not in cols:
+                self._conn.execute("ALTER TABLE sentence_stat ADD COLUMN "
+                                   "unaided_count INTEGER NOT NULL DEFAULT 0")
+            if "unaided_last_ts" not in cols:
+                self._conn.execute("ALTER TABLE sentence_stat ADD COLUMN "
+                                   "unaided_last_ts REAL NOT NULL DEFAULT 0")
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS practice_event ("
+                "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "  ts REAL NOT NULL,"
+                "  key TEXT NOT NULL,"
+                "  kind TEXT NOT NULL,"        # 'unaided' (room for 'prompted' later)
+                "  similarity REAL)"
+            )
         if ver < SCHEMA_VERSION:
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._conn.commit()
 
     # --- reads -----------------------------------------------------------
     def load_stats(self) -> dict[str, PracticeStat]:
-        """Every sentence's persisted (count, last_ts), keyed by sentence.key —
-        drop-in for the in-memory `stats` the loop used to start empty."""
+        """Every sentence's persisted (count, last_ts, unaided_count), keyed by
+        sentence.key — drop-in for the in-memory `stats` the loop started empty.
+        unaided_count is shadow data; select_targets ignores it (for now)."""
         rows = self._conn.execute(
-            "SELECT key, count, last_ts FROM sentence_stat").fetchall()
-        return {k: PracticeStat(count=c, last_ts=t) for k, c, t in rows}
+            "SELECT key, count, last_ts, unaided_count FROM sentence_stat").fetchall()
+        return {k: PracticeStat(count=c, last_ts=t, unaided_count=u)
+                for k, c, t, u in rows}
 
     # --- writes ----------------------------------------------------------
     def record_practiced(self, keys: Iterable[str], now: float) -> int:
@@ -104,6 +121,36 @@ class PracticeStore:
                 [(k, now) for k in clean],
             )
         return len(clean)
+
+    def record_unaided(self, key: str, similarity: float, now: float) -> bool:
+        """SHADOW signal (T-P2-2b): the user spontaneously produced `key` without
+        it being a steered target this turn. Bumps unaided_count + logs an event
+        for later calibration. Does NOT touch `count`/`last_ts`, so select_targets
+        scheduling is untouched (a false positive can't poison the schedule).
+        Returns False (no-op) for a blank key. One transaction."""
+        key = (key or "").strip()
+        if not key:
+            return False
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO sentence_stat(key, count, last_ts, unaided_count, unaided_last_ts) "
+                "VALUES(?, 0, 0, 1, ?) "
+                "ON CONFLICT(key) DO UPDATE SET "
+                "  unaided_count = unaided_count + 1, unaided_last_ts = excluded.unaided_last_ts",
+                (key, now),
+            )
+            self._conn.execute(
+                "INSERT INTO practice_event(ts, key, kind, similarity) VALUES(?, ?, 'unaided', ?)",
+                (now, key, similarity),
+            )
+        return True
+
+    def unaided_events(self) -> list[tuple]:
+        """All logged unaided events (ts, key, similarity), oldest first — the
+        calibration audit trail. Read-only helper for an offline review tool."""
+        return self._conn.execute(
+            "SELECT ts, key, similarity FROM practice_event "
+            "WHERE kind='unaided' ORDER BY id").fetchall()
 
     # --- lifecycle -------------------------------------------------------
     def close(self) -> None:

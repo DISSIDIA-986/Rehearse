@@ -19,8 +19,16 @@
   真正闭合 conversational spaced repetition。`--no-persist` 退回 v1 纯内存；`--practice-db` 指定路径。
   内存/磁盘逐字符一致、损坏库隔离重建、WAL、锁库快速降级、错误 schema 隔离——全部有测（25 个用例）。
   三轮 Codex 对抗审查 CLEAN。
-- **2b [TODO]** "无提示自发产出"检测：最高级掌握信号（D3=A 的 10/10）。延迟——需更严阈值 + 排除当轮
-  active 目标 + 事件日志，证明不污染排程后再接入。`practice_store` 的 schema 已留 `user_version` 迁移位。
+- **2b [SHADOW DONE 2026-06-11]** "无提示自发产出"检测：最高级掌握信号（D3=A 的 10/10）。
+  以**影子模式**落地（`rehearse/unaided.py` + `practice_store` schema v2：`unaided_count`/
+  `unaided_last_ts` + `practice_event` 审计表）：检测用户自发产出"非当轮 active 目标"的已练句子并
+  **只记录、不影响 `select_targets` 排程**（结构上不可能污染）。`--enable-unaided` 开启（默认关闭=零回归零延迟），
+  置于播放之后（off 关键路径）、永不抛入循环。候选集有界（count>0、排除 active、cap 64），严阈值 0.65
+  （>D3 的 0.50），每轮至多一次命中。路径由 Codex+Claude 子代理联合评审定（两者分歧：Codex 主张影子模式做，
+  子代理主张先攒数据——综合为"默认关闭的影子基础设施"既安全又开始采集校准数据）。2 轮 Codex 对抗审查 CLEAN。
+- **2b 剩余 [TODO]** 阈值校准 + 接入排程：跑若干真实会话后，用 `practice_event` 审计日志校准 0.65 阈值、
+  确认假阳性可控，再决定是否让 `unaided_count` 进入 `select_targets` 加权（需独立策略，非直接 `count+=1`）。
+  这一步需用户真实使用数据，无法离线完成。
 - **Why:** MVP 的"练过"只到"复述/改写命中"（D3=A 的 7/10）；2b 补齐到 10/10。
 - **Context:** D3 选 A 时明确把"自发产出"划到 Phase 2。2a 由 Codex+Claude 子代理联合评审选为 Phase 2 首做项。
 
