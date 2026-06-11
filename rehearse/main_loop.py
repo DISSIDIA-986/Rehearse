@@ -24,6 +24,7 @@ from rehearse import audio_io
 from rehearse.anki_loader import load_sentences
 from rehearse.duplex import HalfDuplexGate
 from rehearse.llm_client import DEFAULT_MODEL, think_probe, warmup
+from rehearse.latency import LatencyAggregator, TurnTrace
 from rehearse.loop_core import UtteranceAssembler, is_stop
 from rehearse.pipeline import respond
 from rehearse.prompt_builder import build_system_prompt
@@ -220,7 +221,7 @@ def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str
     stats: dict[str, PracticeStat] = {}
     history: list[dict[str, str]] = []
     audio_q: queue.Queue = queue.Queue(maxsize=400)
-    latencies: list[float] = []
+    latency = LatencyAggregator()
     attempts = hits = 0
     practiced_keys: set[str] = set()
     perr_shown = False
@@ -288,9 +289,9 @@ def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str
     threading.Thread(target=_watch_keys, daemon=True).start()
 
     def _summary():
-        if latencies:
-            print(f"\nlatency vad_end->first audio: p50={np.percentile(latencies,50):.2f}s "
-                  f"p95={np.percentile(latencies,95):.2f}s over {len(latencies)} turns")
+        line = latency.summary_line()
+        if line:
+            print("\n" + line)
         if not practiced_on:
             print("practiced: tracking was unavailable (nomic-embed down) this session")
         elif attempts:
@@ -345,7 +346,13 @@ def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str
                             {"role": "assistant", "content": r.reply_text}]
                 history = history[-12:]  # keep context short
                 if r.reply_audio.size:
-                    latencies.append(time.monotonic() - t_end)  # vad_end -> first audio
+                    felt = time.monotonic() - t_end  # vad_end -> about to play first audio
+                    trace = TurnTrace(asr_s=r.asr_s, ttft_s=r.ttft_s,
+                                      tts_ttfa_s=r.tts_ttfa_s, tts_total_s=r.tts_s,
+                                      felt_s=felt)
+                    latency.add(trace)
+                    if debug_dir:
+                        print(f"  {trace.one_line()}")
                     play(r.reply_audio)
     except KeyboardInterrupt:
         print("\nBye! Keep practicing.")
@@ -406,6 +413,7 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
     history: list[dict[str, str]] = []
     attempts = hits = 0
     pkeys: set[str] = set()
+    latency = LatencyAggregator()
     print("\nManual turns: Enter to speak, Enter again to send. Pause to think freely. "
           "Say or type 's'+Enter to quit.\n")
     try:
@@ -429,6 +437,7 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
                     print("(heard nothing — try again)\n"); continue
                 # resample the whole utterance ONCE (no per-block boundary artifacts)
                 utterance = audio_io.resample(np.concatenate(blocks), in_sr, audio_io.ASR_SR)
+                t_end = time.monotonic()
                 targets = select_targets(sentences, stats, n=n_targets)
                 r = respond(utterance, history, targets, asr=asr, tts=tts,
                             chat_fn=coach_chat,
@@ -455,6 +464,13 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
                             {"role": "assistant", "content": r.reply_text}]
                 history = history[-12:]
                 if r.reply_audio.size:
+                    felt = time.monotonic() - t_end  # send -> about to play first audio
+                    trace = TurnTrace(asr_s=r.asr_s, ttft_s=r.ttft_s,
+                                      tts_ttfa_s=r.tts_ttfa_s, tts_total_s=r.tts_s,
+                                      felt_s=felt)
+                    latency.add(trace)
+                    if debug_dir:
+                        print(f"     {trace.one_line()}")
                     out_stream.write(audio_io.resample(r.reply_audio, tts.sr, out_sr))
                 print()
     except (KeyboardInterrupt, EOFError):
@@ -467,6 +483,9 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
     print("\nBye! Keep practicing.")
     if practiced_on and attempts:
         print(f"practiced: {hits} hits / {attempts} target-exposures, {len(pkeys)} distinct")
+    line = latency.summary_line()
+    if line:
+        print(line)
     return 0
 
 
@@ -519,21 +538,25 @@ def run_recall(path: str, coach_backend: str, model: str | None,
         return 1
     asr, tts, embed, coach_chat, _mid, _backend = started
 
-    # Resolve the backend up front just to report it (mlx ~2.6x on Apple Silicon, else
-    # Ollama). load_markdown re-resolves internally so the cache key matches; the model
-    # is loaded LAZILY on the first chunk, so a cache hit never loads it.
-    _, extract_id, backend_name = resolve_extract_chat(extract_backend, extract_model)
-    print(f"Extracting recall items from {path} (backend {backend_name}, {extract_id}).")
-    print("  This is ONE-TIME and cached — a long doc is one LLM call per chunk, so it")
-    print("  can take a few minutes the first time. Progress below (Ctrl-C to abort):")
+    # Resolve the backend up front just to report it (fast = no LLM; auto = mlx if
+    # available else ollama). load_markdown re-resolves internally so the cache key
+    # matches; the LLM is loaded LAZILY on the first chunk, so a cache hit never loads it.
+    if extract_backend == "fast":
+        print(f"Extracting recall items from {path} (fast mode: no LLM, heading+bullet parser).")
+        progress = None
+    else:
+        _, extract_id, backend_name = resolve_extract_chat(extract_backend, extract_model)
+        print(f"Extracting recall items from {path} (backend {backend_name}, {extract_id}).")
+        print("  This is ONE-TIME and cached — a long doc is one LLM call per chunk, so it")
+        print("  can take a few minutes the first time. Progress below (Ctrl-C to abort):")
 
-    def _progress(done, total):
-        end = "\n" if done == total else "\r"
-        print(f"  extracting chunk {done}/{total}...", end=end, flush=True)
+        def progress(done, total):
+            end = "\n" if done == total else "\r"
+            print(f"  extracting chunk {done}/{total}...", end=end, flush=True)
 
     try:
         items = load_markdown(path, backend=extract_backend, model=extract_model,
-                              on_progress=_progress)
+                              on_progress=progress)
     except KeyboardInterrupt:  # BaseException, not caught below — honor the "Ctrl-C to abort" hint
         print("\nExtraction aborted (nothing cached). Re-run to resume from scratch.", file=sys.stderr)
         return 130
@@ -597,6 +620,7 @@ def run_recall(path: str, coach_backend: str, model: str | None,
         return audio_io.resample(np.concatenate(blocks), in_sr, audio_io.ASR_SR)
 
     history: list[dict[str, str]] = []
+    latency = LatencyAggregator()
     print("\nRecall mode: Enter to speak your answer, Enter again to send. "
           "Pause to think freely. Say or type 's'+Enter to quit.\n")
     opening = session.opening_line()
@@ -611,6 +635,7 @@ def run_recall(path: str, coach_backend: str, model: str | None,
                 utterance = _record_utterance()
                 if utterance is None:
                     print("(heard nothing — try again)\n"); continue
+                t_end = time.monotonic()
                 prompt = session.coach_prompt()
                 st = speak_turn(utterance, history, asr=asr, tts=tts,
                                 system_prompt=prompt, chat_fn=coach_chat,
@@ -637,6 +662,13 @@ def run_recall(path: str, coach_backend: str, model: str | None,
                             {"role": "assistant", "content": st.reply_text}]
                 history = history[-12:]
                 if st.reply_audio.size:
+                    felt = time.monotonic() - t_end  # answer-end -> about to play first audio
+                    trace = TurnTrace(asr_s=st.asr_s, ttft_s=st.ttft_s,
+                                      tts_ttfa_s=st.tts_ttfa_s, tts_total_s=st.tts_s,
+                                      felt_s=felt)
+                    latency.add(trace)
+                    if debug_dir:
+                        print(f"     {trace.one_line()}")
                     out_stream.write(audio_io.resample(st.reply_audio, tts.sr, out_sr))
                 print()
             closing = "That's the whole agenda — nicely done." if session.done \
@@ -651,6 +683,9 @@ def run_recall(path: str, coach_backend: str, model: str | None,
         except Exception:
             pass
     print(f"\nRecall summary: {session.summary()}")
+    line = latency.summary_line()
+    if line:
+        print(line)
     return 0
 
 
@@ -712,9 +747,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="english = Anki conversation practice; markdown = recall a doc from memory")
     ap.add_argument("--path", default=None,
                     help="absolute path to the markdown file to recall (with --content markdown)")
-    ap.add_argument("--extract-backend", choices=["auto", "mlx", "ollama"], default="auto",
-                    help="LLM backend for one-time markdown->agenda extraction: auto (mlx if "
-                         "available, ~2.6x faster on Apple Silicon, else ollama)")
+    ap.add_argument("--extract-backend", choices=["auto", "mlx", "ollama", "fast"], default="auto",
+                    help="extraction strategy: auto (mlx if available else ollama, LLM-based) | "
+                         "mlx | ollama | fast (no LLM, instant heading+bullet parser — best for "
+                         "well-structured docs like resumes/notes/glossaries)")
     ap.add_argument("--extract-model", default=None,
                     help="override the extract model id for the chosen backend "
                          "(mlx default: mlx-community/Qwen3.5-4B-MLX-4bit; ollama default: qwen3.5:4b)")

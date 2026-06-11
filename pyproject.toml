@@ -7,6 +7,7 @@ dependencies = ["numpy>=1.26"]
 
 [project.scripts]
 rehearse = "rehearse.main_loop:main"
+rehearse-bench-asr = "rehearse.bench_asr:main"  # ASR eval tool (not the shipped pipeline)
 
 [project.optional-dependencies]
 # Audio runtime (no torch) — install with: uv sync --extra audio
@@ -24,6 +25,10 @@ audio = [
 # VAD model pulls torch (heavy) — separate so the audio extra stays light:
 #   uv sync --extra audio --extra vad
 vad = ["silero-vad>=5"]
+# Parakeet ASR — ONLY for the rehearse-bench-asr evaluation tool, NOT the shipped
+# pipeline (the live loop still uses faster-whisper on CPU). Install only to run the
+# benchmark: uv sync --extra audio --extra parakeet
+parakeet = ["parakeet-mlx>=0.2"]
 
 [dependency-groups]
 dev = ["pytest>=8"]

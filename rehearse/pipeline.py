@@ -41,7 +41,8 @@ class TurnResult:
     practiced: list[PracticeHit] = field(default_factory=list)
     ttft_s: float | None = None  # LLM time-to-first-token
     asr_s: float = 0.0  # ASR transcription wall time
-    tts_s: float = 0.0  # TTS synthesis wall time
+    tts_s: float = 0.0  # TTS synthesis wall time (all chunks)
+    tts_ttfa_s: float = 0.0  # TTS time-to-first-audio (just the first chunk)
     practiced_error: str | None = None  # set if D3 scoring failed (surfaced, not swallowed)
 
 
@@ -56,6 +57,7 @@ class SpokenTurn:
     ttft_s: float | None = None
     asr_s: float = 0.0
     tts_s: float = 0.0
+    tts_ttfa_s: float = 0.0  # TTS time-to-first-audio (just the first chunk)
 
 
 def speak_turn(
@@ -89,10 +91,16 @@ def speak_turn(
     reply = sanitize_for_tts(result.text)
     chunks = chunk_sentences(reply)
     t1 = time.monotonic()
-    pieces = [tts.synth(c) for c in chunks] if chunks else []
+    pieces: list[np.ndarray] = []
+    tts_ttfa_s = 0.0
+    for i, c in enumerate(chunks):
+        pieces.append(tts.synth(c))
+        if i == 0:  # time-to-first-audio: the only TTS latency the user feels
+            tts_ttfa_s = time.monotonic() - t1
     audio = np.concatenate(pieces) if pieces else empty
     tts_s = time.monotonic() - t1
-    return SpokenTurn(user_text, reply, chunks, audio, result.ttft_s, asr_s, tts_s)
+    return SpokenTurn(user_text, reply, chunks, audio, result.ttft_s, asr_s, tts_s,
+                      tts_ttfa_s)
 
 
 def respond(
@@ -138,5 +146,6 @@ def respond(
         ttft_s=st.ttft_s,
         asr_s=st.asr_s,
         tts_s=st.tts_s,
+        tts_ttfa_s=st.tts_ttfa_s,
         practiced_error=practiced_error,
     )
