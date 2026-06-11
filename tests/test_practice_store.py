@@ -244,6 +244,45 @@ def test_two_connections_see_each_others_commits(tmp_path):
         a.close(); b.close()
 
 
+def test_concurrent_first_open_keeps_persistence(tmp_path):
+    # Two `rehearse` processes can open the SAME fresh DB at once (WAL exists for
+    # exactly that). The migration's (check cols)->(ALTER) is a cross-process
+    # TOCTOU: the loser's ALTER would raise "duplicate column name". The swallow
+    # makes every concurrent open succeed; without it one session would lose
+    # persistence (or raise). Faithful repro: N threads racing the open at a barrier.
+    import threading
+
+    path = _db(tmp_path)
+    n = 8
+    barrier = threading.Barrier(n)
+    errors: list[str] = []
+
+    def worker(i: int) -> None:
+        try:
+            barrier.wait()            # align all opens to maximize the race window
+            s = PracticeStore(path)   # migration runs (and races) here
+            try:
+                s.record_practiced([f"k{i}"], now=float(i))
+            finally:
+                s.close()
+        except Exception as e:        # noqa: BLE001 — any open/migrate failure fails the test
+            errors.append(repr(e))
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [], f"concurrent open raised instead of self-healing: {errors}"
+    # Full v2 schema intact and every racer's write persisted.
+    with PracticeStore(path) as s:
+        stats = s.load_stats()
+        assert {f"k{i}" for i in range(n)} <= set(stats)
+        assert all(st.unaided_count == 0 for st in stats.values())
+        assert s.unaided_events() == []
+
+
 # --- schema / migration ---------------------------------------------------
 
 def test_user_version_is_set(tmp_path):

@@ -62,8 +62,33 @@ class PracticeStore:
                     side = self.path.with_name(self.path.name + ext)
                     if side.exists():
                         side.unlink()
-        self._conn = _connect(":memory:" if self._memory else str(self.path))
-        self._migrate()
+        self._open_and_migrate(":memory:" if self._memory else str(self.path))
+
+    def _open_and_migrate(self, target: str) -> None:
+        # Two `rehearse` instances opening the SAME fresh DB at once race on WAL
+        # journal-mode init + schema DDL. The journal-mode switch can raise
+        # "database is locked" (busy_timeout does NOT cover it), and the migration's
+        # check-then-ALTER can raise "duplicate column name". Both are TRANSIENT:
+        # once the winner finishes (sub-ms DDL), WAL is already set and the columns
+        # exist, so a retry is a near-no-op. Bounded retry so BOTH sessions keep
+        # persistence instead of one degrading to in-memory. :memory: never contends.
+        last: Exception | None = None
+        for attempt in range(8):
+            try:
+                self._conn = _connect(target)
+                self._migrate()
+                return
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                if "locked" not in msg and "duplicate column" not in msg:
+                    raise  # a real schema/IO error — let the caller quarantine/degrade
+                last = e
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                _time.sleep(0.02 * (attempt + 1))  # ~0.02..0.16s backoff, ~0.7s total
+        raise last  # exhausted retries — caller (_open_store) degrades to in-memory
 
     # --- schema ----------------------------------------------------------
     def _migrate(self) -> None:
@@ -79,13 +104,25 @@ class PracticeStore:
         )
         # v2: T-P2-2b shadow columns + event log (additive, data-preserving). Guarded
         # by column existence, NOT by user_version, so it self-repairs.
+        def _add_col(ddl: str) -> None:
+            # The (check cols) -> (ALTER) pair is not atomic across processes: two
+            # `rehearse` instances opening a fresh/v1 DB at once can both see the
+            # column missing, and the loser's ALTER raises "duplicate column name".
+            # Swallow ONLY that (the column now exists, which is the goal) so a
+            # concurrent open self-heals instead of degrading to in-memory.
+            try:
+                self._conn.execute(ddl)
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
+
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(sentence_stat)")}
         if "unaided_count" not in cols:
-            self._conn.execute("ALTER TABLE sentence_stat ADD COLUMN "
-                               "unaided_count INTEGER NOT NULL DEFAULT 0")
+            _add_col("ALTER TABLE sentence_stat ADD COLUMN "
+                     "unaided_count INTEGER NOT NULL DEFAULT 0")
         if "unaided_last_ts" not in cols:
-            self._conn.execute("ALTER TABLE sentence_stat ADD COLUMN "
-                               "unaided_last_ts REAL NOT NULL DEFAULT 0")
+            _add_col("ALTER TABLE sentence_stat ADD COLUMN "
+                     "unaided_last_ts REAL NOT NULL DEFAULT 0")
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS practice_event ("
             "  id INTEGER PRIMARY KEY AUTOINCREMENT,"

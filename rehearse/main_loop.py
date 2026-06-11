@@ -337,28 +337,34 @@ def run_loop(decks: list[str], coach_backend: str, model: str | None, voice: str
                 history += [{"role": "user", "content": r.user_text},
                             {"role": "assistant", "content": r.reply_text}]
                 history = history[-12:]  # keep context short
-                if r.reply_audio.size:
-                    felt = time.monotonic() - t_end  # vad_end -> about to play first audio
-                    trace = TurnTrace.from_turn(r, felt)
-                    latency.add(trace)
-                    if debug_dir:
-                        print(f"  {trace.one_line()}")
-                    play(r.reply_audio)
-                # Bookkeeping AFTER playback — keep the practiced disk-write and the
-                # shadow scoring OFF the felt-latency (first-audio) path.
                 turn_keys: list[str] = []
-                if practiced_on:
-                    now = time.time()
-                    da, dh, turn_keys = apply_practiced(r.practiced, len(targets),
-                                                        sentences, stats, practiced_keys, now)
-                    attempts += da; hits += dh
-                    if store is not None and turn_keys:
-                        try:
-                            store.record_practiced(turn_keys, now)
-                        except Exception as e:  # never let a disk error kill a turn
-                            if not store_err_shown:
-                                print(f"  (practice not saved: {e}; continuing in-memory)")
-                                store_err_shown = True
+                try:
+                    if r.reply_audio.size:
+                        felt = time.monotonic() - t_end  # vad_end -> about to play first audio
+                        trace = TurnTrace.from_turn(r, felt)
+                        latency.add(trace)
+                        if debug_dir:
+                            print(f"  {trace.one_line()}")
+                        play(r.reply_audio)
+                finally:
+                    # Bookkeeping AFTER playback (off the felt-latency first-audio path)
+                    # but in `finally` so a Ctrl-C or playback exception still persists
+                    # this turn's practice credit — pre-reorder behavior, kept durable.
+                    if practiced_on:
+                        now = time.time()
+                        da, dh, turn_keys = apply_practiced(r.practiced, len(targets),
+                                                            sentences, stats, practiced_keys, now)
+                        attempts += da; hits += dh
+                        if store is not None and turn_keys:
+                            try:
+                                store.record_practiced(turn_keys, now)
+                            except Exception as e:  # never let a disk error kill a turn
+                                if not store_err_shown:
+                                    print(f"  (practice not saved: {e}; continuing in-memory)")
+                                    store_err_shown = True
+                # Shadow unaided is default-off and throwaway (never persisted as
+                # credit) — left OUTSIDE the finally so a Ctrl-C during playback skips
+                # its embedding call rather than adding it to the shutdown path.
                 if enable_unaided:  # default-off -> literally zero extra per-turn work
                     u = _shadow_unaided(enable_unaided, store, stats, sentences, targets,
                                         r.user_text, ollama_embed if practiced_on else None,
@@ -534,28 +540,33 @@ def run_manual(decks: list[str], coach_backend: str, model: str | None, voice: s
                 history += [{"role": "user", "content": r.user_text},
                             {"role": "assistant", "content": r.reply_text}]
                 history = history[-12:]
-                if r.reply_audio.size:
-                    felt = time.monotonic() - t_end  # send -> about to play first audio
-                    trace = TurnTrace.from_turn(r, felt)
-                    latency.add(trace)
-                    if debug_dir:
-                        print(f"     {trace.one_line()}")
-                    out_stream.write(audio_io.resample(r.reply_audio, tts.sr, out_sr))
-                # Bookkeeping AFTER playback — keep the practiced disk-write and the
-                # shadow scoring OFF the felt-latency (first-audio) path.
                 turn_keys: list[str] = []
-                if practiced_on:
-                    now = time.time()
-                    da, dh, turn_keys = apply_practiced(r.practiced, len(targets),
-                                                        sentences, stats, pkeys, now)
-                    attempts += da; hits += dh
-                    if store is not None and turn_keys:
-                        try:
-                            store.record_practiced(turn_keys, now)
-                        except Exception as e:
-                            if not store_err_shown:
-                                print(f"  (practice not saved: {e}; continuing in-memory)")
-                                store_err_shown = True
+                try:
+                    if r.reply_audio.size:
+                        felt = time.monotonic() - t_end  # send -> about to play first audio
+                        trace = TurnTrace.from_turn(r, felt)
+                        latency.add(trace)
+                        if debug_dir:
+                            print(f"     {trace.one_line()}")
+                        out_stream.write(audio_io.resample(r.reply_audio, tts.sr, out_sr))
+                finally:
+                    # Bookkeeping AFTER playback (off the felt-latency first-audio path)
+                    # but in `finally` so a Ctrl-C or playback exception still persists
+                    # this turn's practice credit — pre-reorder behavior, kept durable.
+                    if practiced_on:
+                        now = time.time()
+                        da, dh, turn_keys = apply_practiced(r.practiced, len(targets),
+                                                            sentences, stats, pkeys, now)
+                        attempts += da; hits += dh
+                        if store is not None and turn_keys:
+                            try:
+                                store.record_practiced(turn_keys, now)
+                            except Exception as e:
+                                if not store_err_shown:
+                                    print(f"  (practice not saved: {e}; continuing in-memory)")
+                                    store_err_shown = True
+                # Shadow unaided is default-off and throwaway — left OUTSIDE the finally
+                # so a Ctrl-C during playback skips its embedding call (see run_loop).
                 if enable_unaided:  # default-off -> literally zero extra per-turn work
                     u = _shadow_unaided(enable_unaided, store, stats, sentences, targets,
                                         r.user_text, ollama_embed if practiced_on else None,
